@@ -37,5 +37,5 @@ setup(
     package_data={
         "datasette_enrichments": ["templates/*"]
     },
-    python_requires=">=3.6",
+    python_requires=">=3.7",
 )
