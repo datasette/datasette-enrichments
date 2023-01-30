@@ -7,6 +7,10 @@
 
 Tools for running enrichments against data stored in Datasette
 
+**PROJECT STATUS:** This doesn't come close to working yet. The work is mainly happening in [the issues](https://github.com/simonw/datasette-enrichments/issues).
+
+<!--
+
 ## Installation
 
 Install this plugin in the same environment as Datasette.
@@ -16,6 +20,8 @@ Install this plugin in the same environment as Datasette.
 ## Usage
 
 Usage instructions go here.
+
+-->
 
 ## Development
 
