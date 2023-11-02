@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block crumbs %}
+{{ crumbs.nav(request=request, database=database, table=table) }}
+{% endblock %}
+
+{% block title %}Enrich data in {{ table }}{% if enrichment %}: {{ enrichment.name }}{% endif %}{% endblock %}
+
+{% block content %}
+<h1>Enrich data in {{ table }}</h1>
+
+<p>{{ "{:,}".format(stuff.count) }} row{% if stuff.count != 1 %}s{% endif %} selected
+{{ stuff.human_description_en }}</p>
+
+{% if enrichment %}
+
+  <h2>{{ enrichment.name }}</h2>
+  <p>{{ enrichment.description }}</p>
+
+  <p>Select columns to use with this enrichment:</p>
+  <form action="{{ request.full_path }}" method="POST">
+    {% for column in columns %}
+      <p><label><input type="checkbox" name="column.{{ column }}"> {{ column }}</label></p>
+    {% endfor %}
+    <p>
+      <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
+      <input type="submit" value="Enrich data">
+     </p>
+  </form>
+  </p>
+
+{% else %}
+  <h2>Select an enrichment</h2>
+
+  <style type="text/css">
+  .enrichments dt {
+    font-weight: bold;
+  }
+  .enrichments dd {
+    text-indent: 1em;
+  }
+  </style>
+
+  <dl class="enrichments">
+    {% for enrichment in enrichments %}
+    <dt><a href="{{ enrichment.path }}">{{ enrichment.name }}</a></dt>
+    <dd>{{ enrichment.description }}</dd>
+    {% endfor %}
+  </dl>
+{% endif %}
+
+{% endblock %}
