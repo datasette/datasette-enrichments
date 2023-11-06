@@ -1,14 +1,14 @@
 from datasette import Response
-from datasette.utils import path_with_added_args
+from datasette.utils import path_with_added_args, MultiParams
 import urllib.parse
 
 
 enrichments = [
-    # {
-    #     "slug": "openai-embeddings",
-    #     "name": "OpenAI Embeddings",
-    #     "description": "Calculate embeddings for text columns in a table. Embeddings are numerical representations which can then be used to power semantic search and find related content.",
-    # },
+    {
+        "slug": "openai-embeddings",
+        "name": "OpenAI Embeddings",
+        "description": "Calculate embeddings for text columns in a table. Embeddings are numerical representations which can then be used to power semantic search and find related content.",
+    },
     # {
     #     "slug": "youtube-whisperx",
     #     "name": "Transcribe YouTube with WhisperX",
@@ -43,6 +43,8 @@ enrichments = [
 
 
 async def enrich_data(datasette, request):
+    from . import Embeddings
+
     database = request.url_vars["database"]
     table = request.url_vars["table"]
 
@@ -75,6 +77,15 @@ async def enrich_data(datasette, request):
     if request.method == "POST":
         return await enrich_data_post(datasette, request, enrichment, stuff)
 
+    form = None
+    if enrichment:
+        enrichment_object = Embeddings()
+        form = (
+            await enrichment_object.get_config_form(
+                datasette.get_database(database), table
+            )
+        )()
+
     return Response.html(
         await datasette.render_template(
             "enrich_data.html",
@@ -92,7 +103,7 @@ async def enrich_data(datasette, request):
                     for enrichment in enrichments
                 ],
                 "enrichment": enrichment,
-                "columns": stuff["columns"],
+                "enrichment_form": form,
             },
             request,
         )
@@ -105,9 +116,9 @@ COLUMN_PREFIX = "column."
 async def enrich_data_post(datasette, request, enrichment, stuff):
     db = datasette.get_database(request.url_vars["database"])
     table = request.url_vars["table"]
-    from . import Uppercase
+    from . import Embeddings
 
-    enrichment = Uppercase()
+    enrichment = Embeddings()
     # Initialize any necessary tables
     await enrichment.initialize(db, table, {})
 
@@ -119,14 +130,47 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
                 filters.append((key, value))
     filter_querystring = urllib.parse.urlencode(filters)
 
-    post_vars = await request.post_vars()
+    # Roll our own form parsing because .post_vars() eliminates duplicate names
+    body = await request.post_body()
+    post_vars = MultiParams(urllib.parse.parse_qs(body.decode("utf-8")))
 
-    columns = [
-        key[len(COLUMN_PREFIX) :] for key in post_vars if key.startswith(COLUMN_PREFIX)
-    ]
+    Form = await enrichment.get_config_form(db, table)
+
+    form = Form(post_vars)
+    if not form.validate():
+        return Response.html(
+            await datasette.render_template(
+                "enrich_data.html",
+                {
+                    "database": db.name,
+                    "table": table,
+                    "stuff": stuff,
+                    "enrichments": [
+                        dict(
+                            enrichment,
+                            path=path_with_added_args(
+                                request, {"_enrichment": enrichment["slug"]}
+                            ),
+                        )
+                        for enrichment in enrichments
+                    ],
+                    "enrichment": enrichment,
+                    "enrichment_form": form,
+                },
+                request,
+            )
+        )
+
+    copy = post_vars._data.copy()
+    copy.pop("csrftoken", None)
 
     await enrichment.enqueue(
-        datasette, db, table, filter_querystring, {"columns": columns}
+        datasette,
+        db,
+        table,
+        filter_querystring,
+        copy,
+        request.actor.get("id") if request.actor else None,
     )
 
     # Set message and redirect to table
