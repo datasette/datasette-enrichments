@@ -13,7 +13,8 @@ classifiers = [
 py-modules = [
     "enrichments_examples",
     "uppercase",
-    "openai_embeddings"
+    "openai_embeddings",
+    "jinja_sandbox",
 ]
 
 [project.entry-points.datasette]

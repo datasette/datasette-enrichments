@@ -113,9 +113,6 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
     db = datasette.get_database(request.url_vars["database"])
     table = request.url_vars["table"]
 
-    # Initialize any necessary tables
-    await enrichment.initialize(db, table, {})
-
     # Enqueue the enrichment to be run
     filters = []
     for key in request.args:
@@ -132,6 +129,7 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
 
     form = Form(post_vars)
     if not form.validate():
+        # TODO: Fix this
         return Response.html(
             await datasette.render_template(
                 "enrich_data.html",
@@ -155,15 +153,18 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
             )
         )
 
-    copy = post_vars._data.copy()
-    copy.pop("csrftoken", None)
+    config = post_vars._data.copy()
+    config.pop("csrftoken", None)
+
+    # Initialize any necessary tables
+    await enrichment.initialize(db, table, config)
 
     await enrichment.enqueue(
         datasette,
         db,
         table,
         filter_querystring,
-        copy,
+        config,
         request.actor.get("id") if request.actor else None,
     )
 
