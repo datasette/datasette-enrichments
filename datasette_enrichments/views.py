@@ -41,7 +41,7 @@ async def enrichment_view(datasette, request):
 
     return Response.html(
         await datasette.render_template(
-            "enrich_data.html",
+            ["enrichment-{}.html".format(enrichment.slug), "enrichment.html"],
             {
                 "database": database,
                 "table": table,
@@ -94,7 +94,7 @@ async def enrichment_picker(datasette, request):
 
     return Response.html(
         await datasette.render_template(
-            "enrich_data.html",
+            "enrichment_picker.html",
             {
                 "database": database,
                 "table": table,

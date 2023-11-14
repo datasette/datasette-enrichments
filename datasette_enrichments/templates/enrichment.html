@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block crumbs %}
+{{ crumbs.nav(request=request, database=database, table=table) }}
+{% endblock %}
+
+{% block extra_head %}
+<style type="text/css">
+.config-form {
+  display: grid;
+  grid-template-columns: minmax(auto, 12em) 1fr;
+  grid-gap: 5px;
+  max-width: 800px;
+}
+
+.config-form .label label {
+  padding: 3px;
+  display: block;
+  font-weight: bold;
+}
+
+.config-form .field input[type="text"],
+.config-form .field textarea,
+.config-form .field select {
+  width: 80%;
+
+}
+
+.config-form textarea {
+  height: 4em;
+}
+.config-form ul.errors li {
+  color: darkred;
+  background-color: pink;
+  display: inline-block;
+  padding: 2px 7px;
+  margin-top: 3px;
+  border: 0.5px solid red;
+  border-radius: 5px;
+}
+</style>
+{% endblock %}
+
+{% block title %}Enrich data in {{ table }}: {{ enrichment.name }}{% endblock %}
+
+{% block content %}
+
+<h1>Enrich data in {{ table }}</h1>
+
+<p>{{ "{:,}".format(stuff.count) }} row{% if stuff.count != 1 %}s{% endif %} selected
+{{ stuff.human_description_en }}</p>
+
+<h2>{{ enrichment.name }}</h2>
+<p>{{ enrichment.description }}</p>
+
+<form action="{{ request.full_path }}" method="POST">
+  {% if enrichment_form %}
+    <div class="config-form">
+      {% for field in enrichment_form %}
+        <div class="label{% if field.errors %} errors{% endif %}">
+          <label for="{{ field.id }}">{{ field.label }}</label>
+        </div>
+        <div class="field{% if field.errors %} errors{% endif %}">
+          {{ field }}
+          {% if field.errors %}
+            <ul class="errors">
+              {% for error in field.errors %}
+                <li>{{ error }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if field.description %}
+            <p style="font-size: 0.8em">{{ field.description }}</p>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+  <p>
+    <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
+    <input type="submit" value="Enrich data">
+    </p>
+</form>
+
+{% endblock %}

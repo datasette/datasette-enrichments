@@ -97,7 +97,9 @@ class Enrichment:
                         :enrichment, 'p', :database_name, :table_name, :filter_querystring, :config,
                         datetime('now'), :row_count, 0, 0, 0{}
                     )
-                """.format(", :actor_id" if actor_id else ", null"),
+                """.format(
+                        ", :actor_id" if actor_id else ", null"
+                    ),
                     {
                         "enrichment": self.slug,
                         "database_name": db.name,

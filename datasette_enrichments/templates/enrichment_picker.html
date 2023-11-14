@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block crumbs %}
+{{ crumbs.nav(request=request, database=database, table=table) }}
+{% endblock %}
+
+{% block title %}Enrich data in {{ table }}{% endblock %}
+
+{% block extra_head %}
+<style type="text/css">
+.enrichments dt {
+  font-weight: bold;
+}
+.enrichments dd {
+  text-indent: 1em;
+}
+</style>  
+{% endblock %}
+
+{% block content %}
+
+<h1>Enrich data in {{ table }}</h1>
+
+<p>{{ "{:,}".format(stuff.count) }} row{% if stuff.count != 1 %}s{% endif %} selected
+{{ stuff.human_description_en }}</p>
+
+<h2>Select an enrichment</h2>
+
+<dl class="enrichments">
+  {% for enrichment_and_path in enrichments_and_paths %}
+    <dt><a href="{{ enrichment_and_path.path }}">{{enrichment_and_path.enrichment.name }}</a></dt>
+    <dd>{{ enrichment_and_path.enrichment.description }}</dd>
+  {% endfor %}
+</dl>
+
+{% endblock %}
