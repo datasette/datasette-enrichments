@@ -95,9 +95,9 @@
   </style>
 
   <dl class="enrichments">
-    {% for enrichment in enrichments %}
-    <dt><a href="{{ enrichment.path }}">{{ enrichment.name }}</a></dt>
-    <dd>{{ enrichment.description }}</dd>
+    {% for enrichment_and_path in enrichments_and_paths %}
+      <dt><a href="{{ enrichment_and_path.path }}">{{enrichment_and_path.enrichment.name }}</a></dt>
+      <dd>{{ enrichment_and_path.enrichment.description }}</dd>
     {% endfor %}
   </dl>
 {% endif %}

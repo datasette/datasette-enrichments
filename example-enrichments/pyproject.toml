@@ -1,0 +1,20 @@
+[project]
+name = "datasette-enrichments-examples"
+version = "0.1"
+description = "Example enrichments for development purposes"
+readme = "README.md"
+authors = [{name = "Simon Willison"}]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "License :: OSI Approved :: Apache Software License"
+]
+
+[tool.setuptools]
+py-modules = [
+    "enrichments_examples",
+    "uppercase",
+    "openai_embeddings"
+]
+
+[project.entry-points.datasette]
+enrichments_examples = "enrichments_examples"

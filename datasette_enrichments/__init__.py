@@ -6,14 +6,24 @@ import json
 import math
 import struct
 from typing import List
-from .views import enrich_data
+from datasette.plugins import pm
+from .views import enrichment_picker, enrichment_view
+from . import hookspecs
 
 from wtforms import Form, TextAreaField, PasswordField
 
-
 from datasette.utils import await_me_maybe
-from datasette.plugins import pm
-from . import hookspecs
+
+
+pm.add_hookspecs(hookspecs)
+
+
+async def get_enrichments(datasette):
+    enrichments = []
+    for result in pm.hook.register_enrichments(datasette=datasette):
+        result = await await_me_maybe(result)
+        enrichments.extend(result)
+    return {enrichment.slug: enrichment for enrichment in enrichments}
 
 
 CREATE_JOB_TABLE_SQL = """
@@ -37,14 +47,15 @@ create table if not exists _enrichment_jobs (
 )
 """.strip()
 
-pm.add_hookspecs(hookspecs)
-
 
 class Enrichment:
     batch_size = 100
     runs_in_process = False
     # Cancel run after this many errors
     default_max_errors = 5
+
+    def __repr__(self):
+        return "<Enrichment: {}>".format(self.slug)
 
     async def get_config_form(self, db: Database, table: str):
         return None
@@ -86,9 +97,7 @@ class Enrichment:
                         :enrichment, 'p', :database_name, :table_name, :filter_querystring, :config,
                         datetime('now'), :row_count, 0, 0, 0{}
                     )
-                """.format(
-                        ", :actor_id" if actor_id else ", null"
-                    ),
+                """.format(", :actor_id" if actor_id else ", null"),
                     {
                         "enrichment": self.slug,
                         "database_name": db.name,
@@ -165,169 +174,14 @@ class Enrichment:
         loop.create_task(run_enrichment())
 
 
-class Uppercase(Enrichment):
-    name = "Convert to uppercase"
-    slug = "uppercase"
-    description = "Convert selected columns to uppercase"
-    runs_in_process = True
-
-    async def enrich_batch(
-        self,
-        db: Database,
-        table: str,
-        rows: List[dict],
-        pks: List[str],
-        config: dict,
-        job_id: int,
-    ):
-        columns = config.get("columns") or []
-        if not columns:
-            return
-        wheres = " and ".join('"{}" = ?'.format(pk) for pk in pks)
-        sets = ", ".join('"{}" = upper("{}")'.format(col, col) for col in columns)
-        params = [[row[pk] for pk in pks] for row in rows]
-        await db.execute_write_many(
-            "update [{}] set {} where {}".format(table, sets, wheres), params
-        )
-        await asyncio.sleep(0.3)
-
-
-from wtforms import SelectField
-from wtforms.widgets import ListWidget, CheckboxInput
-from wtforms.validators import DataRequired
-
-
-class MultiCheckboxField(SelectField):
-    widget = ListWidget(prefix_label=False)
-    option_widget = CheckboxInput()
-
-
-from string import Template
-
-
-class SpaceTemplate(Template):
-    # Allow spaces in braced placeholders: ${column name here}
-    braceidpattern = r"[^\}]+"
-
-
-class Embeddings(Enrichment):
-    name = "OpenAI Embeddings"
-    slug = "openai-embeddings"
-    batch_size = 100
-    description = (
-        "Calculate embeddings for text columns in a table. Embeddings are numerical representations which "
-        "can be used to power semantic search and find related content."
-    )
-    runs_in_process = True
-
-    cost_per_1000_tokens_in_100ths_cent = 1
-
-    async def get_config_form(self, db, table):
-        choices = [(col, col) for col in await db.table_columns(table)]
-
-        # Default template uses all string columns
-        default = " ".join("${{{}}}".format(col[0]) for col in choices)
-
-        class ConfigForm(Form):
-            template = TextAreaField(
-                "Template",
-                description="A template to run against each row to generate text to embed. Use ${column-name} for columns.",
-                default=default,
-            )
-            api_token = PasswordField(
-                "OpenAI API token",
-                validators=[DataRequired(message="The token is required.")],
-            )
-            # columns = MultiCheckboxField("Columns", choices=choices)
-
-        return ConfigForm
-
-    async def initialize(self, db, table, config):
-        # Ensure table exists
-        embeddings_table = "_embeddings_{}".format(table)
-        if not await db.table_exists(embeddings_table):
-            # Create it
-            pk_names = await db.primary_keys(table)
-            column_types = {
-                c.name: c.type for c in await db.table_column_details(table)
-            }
-            sql = ["create table [{}] (".format(embeddings_table)]
-            create_bits = []
-            for pk in pk_names:
-                create_bits.append("    [{}] {}".format(pk, column_types[pk]))
-            create_bits.append("    _embedding blob")
-            create_bits.append(
-                "    PRIMARY KEY ({})".format(
-                    ", ".join("[{}]".format(pk) for pk in pk_names)
-                )
-            )
-            # If there's only one primary key, set up a foreign key constraint
-            if len(pk_names) == 1:
-                create_bits.append(
-                    "    FOREIGN KEY ([{}]) REFERENCES [{}] ({})".format(
-                        pk_names[0], table, pk_names[0]
-                    )
-                )
-            sql.append(",\n".join(create_bits))
-            sql.append(")")
-            await db.execute_write("\n".join(sql))
-
-    async def enrich_batch(
-        self,
-        db: Database,
-        table: str,
-        rows: List[dict],
-        pks: List[str],
-        config: dict,
-        job_id: int,
-    ):
-        template = SpaceTemplate(config["template"][0])
-        texts = [template.safe_substitute(row) for row in rows]
-        token = config["api_token"][0]
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                json={"input": texts, "model": "text-embedding-ada-002"},
-            )
-            json_data = response.json()
-
-        results = json_data["data"]
-
-        # Record the cost too
-        # json_data['usage']
-        # {'prompt_tokens': 16, 'total_tokens': 16}
-        cost_per_token_in_100ths_cent = self.cost_per_1000_tokens_in_100ths_cent / 1000
-        total_cost_in_100ths_of_cents = (
-            json_data["usage"]["total_tokens"] * cost_per_token_in_100ths_cent
-        )
-        # Round up to the nearest integer
-        total_cost_rounded_up = math.ceil(total_cost_in_100ths_of_cents)
-        await self.increment_cost(db, job_id, total_cost_rounded_up)
-
-        embeddings_table = "_embeddings_{}".format(table)
-        # Write results to the table
-        for row, result in zip(rows, results):
-            vector = result["embedding"]
-            embedding = struct.pack("f" * len(vector), *vector)
-            await db.execute_write(
-                "insert or replace into [{embeddings_table}] ({pks}, _embedding) values ({pk_question_marks}, ?)".format(
-                    embeddings_table=embeddings_table,
-                    pks=", ".join("[{}]".format(pk) for pk in pks),
-                    pk_question_marks=", ".join("?" for _ in pks),
-                ),
-                list(row[pk] for pk in pks) + [embedding],
-            )
-
-
 @hookimpl
 def register_routes():
     return [
-        (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", enrich_data),
+        (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", enrichment_picker),
+        (
+            r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)/(?P<enrichment>[^/]+)$",
+            enrichment_view,
+        ),
     ]
 
 
