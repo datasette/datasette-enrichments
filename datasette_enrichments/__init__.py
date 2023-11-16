@@ -2,8 +2,10 @@ import asyncio
 from datasette import hookimpl
 from datasette.database import Database
 import json
+import secrets
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
+from .utils import get_with_auth
 from . import hookspecs
 
 from datasette.utils import await_me_maybe
@@ -76,7 +78,8 @@ class Enrichment:
             qs += "&"
         qs += "_size=0&_extra=count"
         table_path = datasette.urls.table(db.name, table)
-        response = await datasette.client.get(table_path + ".json" + "?" + qs)
+
+        response = await get_with_auth(datasette, table_path + ".json" + "?" + qs)
         row_count = response.json()["count"]
         await db.execute_write(CREATE_JOB_TABLE_SQL)
 
@@ -130,7 +133,7 @@ class Enrichment:
                 if next_cursor:
                     qs += "&_next={}".format(next_cursor)
                 qs += "&_size={}".format(self.batch_size)
-                response = await datasette.client.get(table_path + "?" + qs)
+                response = await get_with_auth(datasette, table_path + "?" + qs)
                 rows = response.json()["rows"]
                 if not rows:
                     break
@@ -207,6 +210,19 @@ def table_actions(datasette, actor, database, table, request):
 
 @hookimpl
 def permission_allowed(actor, action):
+    # Special actor used for internal datasette.client.get() calls
+    if actor == {"_datasette_enrichments": True}:
+        return True
     # Root user can always use enrichments
     if action == "enrichments" and actor and actor.get("id") == "root":
         return True
+
+
+@hookimpl(tryfirst=True)
+def actor_from_request(datasette, request):
+    secret_token = request.headers.get("x-datasette-enrichments") or ""
+    expected_token = getattr(datasette, "_secret_enrichments_token", None)
+    if expected_token and secrets.compare_digest(
+        secret_token, datasette._secret_enrichments_token
+    ):
+        return {"_datasette_enrichments": True}

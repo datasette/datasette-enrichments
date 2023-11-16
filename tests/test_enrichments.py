@@ -12,7 +12,16 @@ async def test_uppercase_plugin(tmpdir, is_root):
         db.execute("create table t (id integer primary key, s text)")
         db.execute("insert into t (s) values ('hello')")
         db.execute("insert into t (s) values ('goodbye')")
-    datasette = Datasette([data])
+    datasette = Datasette(
+        [data],
+        metadata={
+            "databases": {
+                # Lock down permissions to test
+                # https://github.com/datasette/datasette-enrichments/issues/13
+                "data": {"allow": {"id": "root"}}
+            }
+        },
+    )
 
     if not is_root:
         response1 = await datasette.client.get("/-/enrich/data/t")

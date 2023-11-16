@@ -1,5 +1,6 @@
 from datasette import Response, NotFound, Forbidden
 from datasette.utils import path_with_added_args, MultiParams
+from .utils import get_with_auth
 import urllib.parse
 
 
@@ -36,8 +37,9 @@ async def enrichment_view(datasette, request):
     # re-encode
     query_string = urllib.parse.urlencode(bits)
     stuff = (
-        await datasette.client.get(
-            datasette.urls.table(database, table, "json") + "?" + query_string
+        await get_with_auth(
+            datasette,
+            datasette.urls.table(database, table, "json") + "?" + query_string,
         )
     ).json()
 
@@ -85,8 +87,9 @@ async def enrichment_picker(datasette, request):
     # re-encode
     query_string = urllib.parse.urlencode(bits)
     stuff = (
-        await datasette.client.get(
-            datasette.urls.table(database, table, "json") + "?" + query_string
+        await get_with_auth(
+            datasette,
+            datasette.urls.table(database, table, "json") + "?" + query_string,
         )
     ).json()
 
