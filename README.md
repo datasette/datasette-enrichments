@@ -7,7 +7,7 @@
 
 Tools for running enrichments against data stored in Datasette
 
-**PROJECT STATUS:** This doesn't come close to working yet. The work is mainly happening in [the issues](https://github.com/simonw/datasette-enrichments/issues).
+**PROJECT STATUS:** This is a very early alpha. The work is mainly happening in [the issues](https://github.com/simonw/datasette-enrichments/issues).
 
 <!--
 
