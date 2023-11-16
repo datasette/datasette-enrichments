@@ -1,16 +1,10 @@
 import asyncio
 from datasette import hookimpl
 from datasette.database import Database
-import httpx
 import json
-import math
-import struct
-from typing import List
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
 from . import hookspecs
-
-from wtforms import Form, TextAreaField, PasswordField
 
 from datasette.utils import await_me_maybe
 
@@ -189,18 +183,30 @@ def register_routes():
 
 @hookimpl
 def table_actions(datasette, actor, database, table, request):
-    if actor and actor.get("id") == "root":
-        return [
-            {
-                "href": datasette.urls.path(
-                    "/-/enrich/{}/{}{}".format(
-                        database,
-                        table,
-                        "?{}".format(request.query_string)
-                        if request.query_string
-                        else "",
-                    )
-                ),
-                "label": "Enrich selected data",
-            }
-        ]
+    async def inner():
+        if await datasette.permission_allowed(
+            actor, "enrichments", resource=database, default=False
+        ):
+            return [
+                {
+                    "href": datasette.urls.path(
+                        "/-/enrich/{}/{}{}".format(
+                            database,
+                            table,
+                            "?{}".format(request.query_string)
+                            if request.query_string
+                            else "",
+                        )
+                    ),
+                    "label": "Enrich selected data",
+                }
+            ]
+
+    return inner
+
+
+@hookimpl
+def permission_allowed(actor, action):
+    # Root user can always use enrichments
+    if action == "enrichments" and actor and actor.get("id") == "root":
+        return True

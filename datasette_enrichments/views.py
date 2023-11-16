@@ -1,6 +1,13 @@
-from datasette import Response, NotFound
+from datasette import Response, NotFound, Forbidden
 from datasette.utils import path_with_added_args, MultiParams
 import urllib.parse
+
+
+async def check_permissions(datasette, request, database):
+    if not await datasette.permission_allowed(
+        request.actor, "enrichments", resource=database, default=False
+    ):
+        raise Forbidden("Permission denied for enrichments")
 
 
 async def enrichment_view(datasette, request):
@@ -9,6 +16,8 @@ async def enrichment_view(datasette, request):
     database = request.url_vars["database"]
     table = request.url_vars["table"]
     slug = request.url_vars["enrichment"]
+
+    await check_permissions(datasette, request, database)
 
     enrichments = await get_enrichments(datasette)
     enrichment = enrichments.get(slug)
@@ -60,6 +69,8 @@ async def enrichment_picker(datasette, request):
     database = request.url_vars["database"]
     table = request.url_vars["table"]
 
+    await check_permissions(datasette, request, database)
+
     enrichments = await get_enrichments(datasette)
 
     query_string = request.query_string
@@ -110,7 +121,10 @@ COLUMN_PREFIX = "column."
 
 
 async def enrich_data_post(datasette, request, enrichment, stuff):
-    db = datasette.get_database(request.url_vars["database"])
+    database = request.url_vars["database"]
+    await check_permissions(datasette, request, database)
+
+    db = datasette.get_database(database)
     table = request.url_vars["table"]
 
     # Enqueue the enrichment to be run

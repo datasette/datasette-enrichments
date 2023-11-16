@@ -4,7 +4,8 @@ import sqlite3
 
 
 @pytest.mark.asyncio
-async def test_uppercase_plugin(tmpdir):
+@pytest.mark.parametrize("is_root", [True, False])
+async def test_uppercase_plugin(tmpdir, is_root):
     data = str(tmpdir / "data.db")
     db = sqlite3.connect(data)
     with db:
@@ -12,6 +13,11 @@ async def test_uppercase_plugin(tmpdir):
         db.execute("insert into t (s) values ('hello')")
         db.execute("insert into t (s) values ('goodbye')")
     datasette = Datasette([data])
+
+    if not is_root:
+        response1 = await datasette.client.get("/-/enrich/data/t")
+        assert response1.status_code == 403
+        return
 
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response1 = await datasette.client.get("/-/enrich/data/t", cookies=cookies)
