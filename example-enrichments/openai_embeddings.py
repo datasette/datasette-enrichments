@@ -55,7 +55,7 @@ class Embeddings(Enrichment):
 
         return ConfigForm
 
-    async def initialize(self, db, table, config):
+    async def initialize(self, datasette, db, table, config):
         # Ensure table exists
         embeddings_table = "_embeddings_{}".format(table)
         if not await db.table_exists(embeddings_table):

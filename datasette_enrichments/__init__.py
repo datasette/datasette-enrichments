@@ -56,7 +56,7 @@ class Enrichment:
     async def get_config_form(self, db: Database, table: str):
         return None
 
-    async def initialize(self, db, table, config):
+    async def initialize(self, datasette, db, table, config):
         pass
 
     async def increment_cost(self, db, job_id, total_cost_rounded_up):
@@ -140,7 +140,13 @@ class Enrichment:
                 # Enrich batch
                 pks = await db.primary_keys(job["table_name"])
                 await self.enrich_batch(
-                    db, job["table_name"], rows, pks, json.loads(job["config"]), job_id
+                    datasette,
+                    db,
+                    job["table_name"],
+                    rows,
+                    pks,
+                    json.loads(job["config"]),
+                    job_id,
                 )
                 # Update next_cursor
                 next_cursor = response.json()["next"]

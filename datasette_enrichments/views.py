@@ -86,12 +86,11 @@ async def enrichment_picker(datasette, request):
     )
     # re-encode
     query_string = urllib.parse.urlencode(bits)
-    stuff = (
-        await get_with_auth(
-            datasette,
-            datasette.urls.table(database, table, "json") + "?" + query_string,
-        )
-    ).json()
+    response = await get_with_auth(
+        datasette,
+        datasette.urls.table(database, table, "json") + "?" + query_string,
+    )
+    stuff = response.json()
 
     enrichments_and_paths = []
     for enrichment in enrichments.values():
@@ -174,7 +173,7 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
     config.pop("csrftoken", None)
 
     # Initialize any necessary tables
-    await enrichment.initialize(db, table, config)
+    await enrichment.initialize(datasette, db, table, config)
 
     await enrichment.enqueue(
         datasette,
