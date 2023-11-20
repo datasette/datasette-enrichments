@@ -87,6 +87,7 @@ class Embeddings(Enrichment):
 
     async def enrich_batch(
         self,
+        datasette,
         db: Database,
         table: str,
         rows: List[dict],
@@ -94,9 +95,9 @@ class Embeddings(Enrichment):
         config: dict,
         job_id: int,
     ):
-        template = SpaceTemplate(config["template"][0])
+        template = SpaceTemplate(config["template"])
         texts = [template.safe_substitute(row) for row in rows]
-        token = config["api_token"][0]
+        token = config["api_token"]
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

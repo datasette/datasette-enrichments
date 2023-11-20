@@ -144,6 +144,7 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
     Form = await enrichment.get_config_form(db, table)
 
     form = Form(post_vars)
+
     if not form.validate():
         # TODO: Fix this
         return Response.html(
@@ -169,8 +170,7 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
             )
         )
 
-    config = post_vars._data.copy()
-    config.pop("csrftoken", None)
+    config = {field.name: field.data for field in form}
 
     # Initialize any necessary tables
     await enrichment.initialize(datasette, db, table, config)

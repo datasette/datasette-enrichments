@@ -32,6 +32,7 @@ def load_uppercase_plugin():
 
         async def enrich_batch(
             self,
+            datasette,
             db: Database,
             table: str,
             rows: List[dict],

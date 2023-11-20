@@ -54,4 +54,4 @@ async def test_uppercase_plugin(tmpdir, is_root):
     # It should be queued up
     assert db.execute(
         "select status, enrichment, database_name, table_name, config from _enrichment_jobs"
-    ).fetchall() == [("p", "uppercasedemo", "data", "t", '{"columns": ["s"]}')]
+    ).fetchall() == [("p", "uppercasedemo", "data", "t", '{"columns": "s"}')]

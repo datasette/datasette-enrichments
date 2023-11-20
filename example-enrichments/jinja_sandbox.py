@@ -38,7 +38,7 @@ class JinjaSandbox(Enrichment):
 
     async def initialize(self, datasette, db, table, config):
         # Ensure column exists
-        output_column = config["output_column"][0]
+        output_column = config["output_column"]
 
         def add_column_if_not_exists(conn):
             db = sqlite_utils.Database(conn)
@@ -58,8 +58,8 @@ class JinjaSandbox(Enrichment):
         job_id: int,
     ):
         env = SandboxedEnvironment(enable_async=True)
-        template = env.from_string(config["template"][0])
-        output_column = config["output_column"][0]
+        template = env.from_string(config["template"])
+        output_column = config["output_column"]
         for row in rows:
             output = await template.render_async({"row": row})
             await db.execute_write(

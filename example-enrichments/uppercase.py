@@ -1,12 +1,12 @@
 from datasette_enrichments import Enrichment
 from datasette.database import Database
 from typing import List
-from wtforms import Form, SelectField
+from wtforms import Form, SelectMultipleField
 from wtforms.widgets import ListWidget, CheckboxInput
 import asyncio
 
 
-class MultiCheckboxField(SelectField):
+class MultiCheckboxField(SelectMultipleField):
     widget = ListWidget(prefix_label=False)
     option_widget = CheckboxInput()
 
@@ -27,6 +27,7 @@ class Uppercase(Enrichment):
 
     async def enrich_batch(
         self,
+        datasette,
         db: Database,
         table: str,
         rows: List[dict],
