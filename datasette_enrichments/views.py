@@ -146,23 +146,13 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
     form = Form(post_vars)
 
     if not form.validate():
-        # TODO: Fix this
         return Response.html(
             await datasette.render_template(
-                "enrich_data.html",
+                ["enrichment-{}.html".format(enrichment.slug), "enrichment.html"],
                 {
-                    "database": db.name,
+                    "database": database,
                     "table": table,
                     "stuff": stuff,
-                    "enrichments": [
-                        dict(
-                            enrichment,
-                            path=path_with_added_args(
-                                request, {"_enrichment": enrichment.slug}
-                            ),
-                        )
-                        for enrichment in enrichments.values()
-                    ],
                     "enrichment": enrichment,
                     "enrichment_form": form,
                 },
