@@ -36,7 +36,7 @@ async def enrichment_view(datasette, request):
     )
     # re-encode
     query_string = urllib.parse.urlencode(bits)
-    stuff = (
+    filtered_data = (
         await get_with_auth(
             datasette,
             datasette.urls.table(database, table, "json") + "?" + query_string,
@@ -46,7 +46,7 @@ async def enrichment_view(datasette, request):
     # If an enrichment is selected, use that UI
 
     if request.method == "POST":
-        return await enrich_data_post(datasette, request, enrichment, stuff)
+        return await enrich_data_post(datasette, request, enrichment, filtered_data)
 
     form = (await enrichment.get_config_form(datasette.get_database(database), table))()
 
@@ -56,7 +56,7 @@ async def enrichment_view(datasette, request):
             {
                 "database": database,
                 "table": table,
-                "stuff": stuff,
+                "filtered_data": filtered_data,
                 "enrichment": enrichment,
                 "enrichment_form": form,
             },
@@ -90,7 +90,7 @@ async def enrichment_picker(datasette, request):
         datasette,
         datasette.urls.table(database, table, "json") + "?" + query_string,
     )
-    stuff = response.json()
+    filtered_data = response.json()
 
     enrichments_and_paths = []
     for enrichment in enrichments.values():
@@ -111,7 +111,7 @@ async def enrichment_picker(datasette, request):
             {
                 "database": database,
                 "table": table,
-                "stuff": stuff,
+                "filtered_data": filtered_data,
                 "enrichments_and_paths": enrichments_and_paths,
             },
             request,
@@ -122,7 +122,7 @@ async def enrichment_picker(datasette, request):
 COLUMN_PREFIX = "column."
 
 
-async def enrich_data_post(datasette, request, enrichment, stuff):
+async def enrich_data_post(datasette, request, enrichment, filtered_data):
     database = request.url_vars["database"]
     await check_permissions(datasette, request, database)
 
@@ -152,7 +152,7 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
                 {
                     "database": database,
                     "table": table,
-                    "stuff": stuff,
+                    "filtered_data": filtered_data,
                     "enrichment": enrichment,
                     "enrichment_form": form,
                 },
@@ -178,7 +178,9 @@ async def enrich_data_post(datasette, request, enrichment, stuff):
     datasette.add_message(
         request,
         "Enrichment started: {} for {} row{}".format(
-            enrichment.name, stuff["count"], "s" if stuff["count"] != 1 else ""
+            enrichment.name,
+            filtered_data["count"],
+            "s" if filtered_data["count"] != 1 else "",
         ),
         datasette.INFO,
     )

@@ -47,8 +47,8 @@
 
 <h1>Enrich data in {{ table }}</h1>
 
-<p>{{ "{:,}".format(stuff.count) }} row{% if stuff.count != 1 %}s{% endif %} selected
-{{ stuff.human_description_en }}</p>
+<p>{{ "{:,}".format(filtered_data.count) }} row{% if filtered_data.count != 1 %}s{% endif %} selected
+{{ filtered_data.human_description_en }}</p>
 
 <h2>{{ enrichment.name }}</h2>
 <p>{{ enrichment.description }}</p>
