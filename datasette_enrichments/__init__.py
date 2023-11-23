@@ -25,7 +25,7 @@ async def get_enrichments(datasette):
 CREATE_JOB_TABLE_SQL = """
 create table if not exists _enrichment_jobs (
     id integer primary key,
-    status text, -- [p]ending, [r]unning, [c]ancelled, [f]inished
+    status text, -- pending, running, cancelled, finished
     enrichment text, -- slug of enrichment
     database_name text,
     table_name text,
@@ -91,7 +91,7 @@ class Enrichment:
                         enrichment, status, database_name, table_name, filter_querystring,
                         config, started_at, row_count, error_count, done_count, cost_100ths_cent, actor_id
                     ) values (
-                        :enrichment, 'p', :database_name, :table_name, :filter_querystring, :config,
+                        :enrichment, 'pending', :database_name, :table_name, :filter_querystring, :config,
                         datetime('now'), :row_count, 0, 0, 0{}
                     )
                 """.format(
@@ -168,7 +168,7 @@ class Enrichment:
                         update _enrichment_jobs
                         set
                             finished_at = datetime('now'),
-                            status = 'f',
+                            status = 'finished',
                             done_count = done_count + ?
                         where id = ?
                         """,
