@@ -13,7 +13,6 @@ formats:
 - epub
 
 python:
-  version: "3.12"
   install:
   - method: setuptools
     path: .[docs]
