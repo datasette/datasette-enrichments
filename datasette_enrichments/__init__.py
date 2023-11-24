@@ -124,6 +124,15 @@ class Enrichment:
 
         async def run_enrichment():
             next_cursor = job["next_cursor"]
+            # Set state to running
+            await db.execute_write(
+                """
+                update _enrichment_jobs
+                set status = 'running'
+                where id = ?
+                """,
+                (job["id"],),
+            )
             while True:
                 # Get next batch
                 table_path = datasette.urls.table(
