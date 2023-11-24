@@ -3,6 +3,7 @@ from datasette.database import Database
 from typing import List
 import math
 import struct
+from string import Template
 import httpx
 
 
@@ -14,9 +15,6 @@ from wtforms.validators import DataRequired
 class MultiCheckboxField(SelectField):
     widget = ListWidget(prefix_label=False)
     option_widget = CheckboxInput()
-
-
-from string import Template
 
 
 class SpaceTemplate(Template):
