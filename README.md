@@ -9,19 +9,7 @@ Tools for running enrichments against data stored in Datasette
 
 **PROJECT STATUS:** This is a very early alpha. The work is mainly happening in [the issues](https://github.com/simonw/datasette-enrichments/issues).
 
-<!--
-
-## Installation
-
-Install this plugin in the same environment as Datasette.
-
-    $ datasette install datasette-enrichments
-
-## Usage
-
-Usage instructions go here.
-
--->
+Documentation for this plugin lives at **[enrichments.datasette.io](https://enrichments.datasette.io/)**.
 
 ## Development
 
