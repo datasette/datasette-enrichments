@@ -20,7 +20,6 @@ def load_uppercase_plugin():
         name = "Convert to uppercase"
         slug = "uppercasedemo"
         description = "Convert selected columns to uppercase"
-        runs_in_process = True
 
         async def get_config_form(self, db, table):
             choices = [(col, col) for col in await db.table_columns(table)]

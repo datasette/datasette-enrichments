@@ -46,7 +46,6 @@ create table if not exists _enrichment_jobs (
 
 class Enrichment:
     batch_size = 100
-    runs_in_process = False
     # Cancel run after this many errors
     default_max_errors = 5
 
@@ -110,8 +109,7 @@ class Enrichment:
             return cursor.lastrowid
 
         job_id = await db.execute_write_fn(_insert)
-        if self.runs_in_process:
-            await self.start_enrichment_in_process(datasette, db, job_id)
+        await self.start_enrichment_in_process(datasette, db, job_id)
 
     async def start_enrichment_in_process(self, datasette, db, job_id):
         loop = asyncio.get_event_loop()
