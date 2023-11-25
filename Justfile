@@ -18,18 +18,12 @@
   echo "Linters..."
   echo "  Black"
   pipenv run black . --check
-  echo "  cog"
-  pipenv run cog --check \
-    README.md docs/*.md
   echo "  ruff"
   pipenv run ruff .
 
-# Rebuild docs with cog
-@cog:
-  pipenv run cog -r *.md docs/*.md
 
 # Serve live docs on localhost:8000
-@docs: cog
+@docs:
   rm -rf docs/_build
   cd docs && pipenv run make livehtml
 
@@ -38,7 +32,7 @@
   pipenv run black .
 
 # Run automatic fixes
-@fix: cog
+@fix:
   pipenv run ruff . --fix
   pipenv run black .
 

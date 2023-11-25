@@ -34,14 +34,13 @@ setup(
     entry_points={"datasette": ["enrichments = datasette_enrichments"]},
     install_requires=["datasette>=1.0a7", "WTForms"],
     extras_require={
-        "test": ["pytest", "pytest-asyncio", "black", "cogapp", "ruff"],
+        "test": ["pytest", "pytest-asyncio", "black", "ruff"],
         "docs": [
             "sphinx==7.2.6",
             "furo==2023.9.10",
             "sphinx-autobuild",
             "sphinx-copybutton",
             "myst-parser",
-            "cogapp",
         ],
     },
     package_data={"datasette_enrichments": ["templates/*"]},

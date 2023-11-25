@@ -1,4 +1,4 @@
-# Setup
+# Installation and setup
 
 To install the Datasette Enrichments plugin, run this:
 ```bash
@@ -10,3 +10,5 @@ You need to install additional plugins for enrichments that you want to use befo
 datasette install datasette-enrichments-jinja
 ```
 Users  with the `enrichments` permission (or the `--root` user) will then be able to select rows for enrichment using the cog actions menu on the table page.
+
+Once you have installed an enrichment you can {ref}`run it against some data<usage>`.
