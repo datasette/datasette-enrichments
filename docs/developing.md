@@ -138,3 +138,16 @@ from wtforms.validators import DataRequired
         return ConfigForm
 ```
 The valid dictionary that is produced by filling in this form will be passed as `config` to both the `initialize()` and `enrich_batch()` methods.
+
+## finalize()
+
+Your class can optionally implement a `finalize()` method. This will be called once at the end of each enrichment run.
+
+```python
+async def finalize(self, datasette, db, table, config):
+    # ...
+```
+- `datasette` is the [Datasette instance]
+- `db` is the [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class)
+- `table` is the name of the table (a string)
+- `config` is an optional dictionary of configuration options that the user set for the run

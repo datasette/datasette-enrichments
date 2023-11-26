@@ -58,6 +58,9 @@ class Enrichment:
     async def initialize(self, datasette, db, table, config):
         pass
 
+    async def finalize(self, datasette, db, table, config):
+        pass
+
     async def increment_cost(self, db, job_id, total_cost_rounded_up):
         await db.execute_write(
             """
@@ -180,6 +183,12 @@ class Enrichment:
                         where id = ?
                         """,
                         (len(rows), job["id"]),
+                    )
+                    await self.finalize(
+                        datasette,
+                        db,
+                        job["table_name"],
+                        json.loads(job["config"]),
                     )
                     break
 
