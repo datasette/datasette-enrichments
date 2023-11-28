@@ -32,7 +32,7 @@ setup(
     version=VERSION,
     packages=["datasette_enrichments"],
     entry_points={"datasette": ["enrichments = datasette_enrichments"]},
-    install_requires=["datasette>=1.0a7", "WTForms"],
+    install_requires=["datasette", "WTForms"],
     extras_require={
         "test": ["pytest", "pytest-asyncio", "black", "ruff"],
         "docs": [

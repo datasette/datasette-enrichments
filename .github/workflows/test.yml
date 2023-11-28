@@ -11,6 +11,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        datasette-version: ["<1.0", ">=1.0a7"]
     steps:
     - uses: actions/checkout@v3
     - name: Set up Python ${{ matrix.python-version }}
@@ -22,7 +23,8 @@ jobs:
     - name: Install dependencies
       run: |
         pip install '.[test]'
+    - name: Install specific version of Datasette
+      run: pip install "datasette${{ matrix.datasette-version }}"
     - name: Run tests
       run: |
         pytest
-
