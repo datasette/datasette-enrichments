@@ -32,12 +32,12 @@ async def test_uppercase_plugin(tmpdir, is_root):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response1 = await datasette.client.get("/-/enrich/data/t", cookies=cookies)
     assert (
-        '<a href="/-/enrich/data/t/uppercasedemo?_enrichment=uppercasedemo">Convert to uppercase</a>'
+        '<a href="/-/enrich/data/t/uppercasedemo">Convert to uppercase</a>'
         in response1.text
     )
 
     response2 = await datasette.client.get(
-        "/-/enrich/data/t/uppercasedemo?_enrichment=uppercasedemo", cookies=cookies
+        "/-/enrich/data/t/uppercasedemo", cookies=cookies
     )
     assert "<h2>Convert to uppercase</h2>" in response2.text
 
@@ -48,7 +48,7 @@ async def test_uppercase_plugin(tmpdir, is_root):
     assert not hasattr(datasette, "_initialize_called_with")
 
     response3 = await datasette.client.post(
-        "/-/enrich/data/t/uppercasedemo?_enrichment=uppercasedemo",
+        "/-/enrich/data/t/uppercasedemo",
         cookies=cookies,
         data={"columns": "s", "csrftoken": csrftoken},
     )
