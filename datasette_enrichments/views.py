@@ -1,5 +1,9 @@
 from datasette import Response, NotFound, Forbidden
-from datasette.utils import path_with_removed_args, MultiParams
+from datasette.utils import (
+    async_call_with_supported_arguments,
+    path_with_removed_args,
+    MultiParams,
+)
 from .utils import get_with_auth
 import urllib.parse
 
@@ -162,8 +166,10 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
 
     config = {field.name: field.data for field in form}
 
-    # Initialize any necessary tables
-    await enrichment.initialize(datasette, db, table, config)
+    # Call initialize method, which can create tables etc
+    await async_call_with_supported_arguments(
+        enrichment.initialize, datasette=datasette, db=db, table=table, config=config
+    )
 
     await enrichment.enqueue(
         datasette,
