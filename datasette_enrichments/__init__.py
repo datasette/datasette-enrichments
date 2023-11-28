@@ -1,6 +1,6 @@
+from abc import ABC, abstractmethod
 import asyncio
 from datasette import hookimpl
-from datasette.database import Database
 import json
 import secrets
 from datasette.plugins import pm
@@ -10,6 +10,11 @@ from . import hookspecs
 
 from datasette.utils import await_me_maybe
 
+from typing import TYPE_CHECKING, Optional, Dict
+
+if TYPE_CHECKING:
+    from datasette.app import Datasette
+    from datasette.database import Database
 
 pm.add_hookspecs(hookspecs)
 
@@ -44,24 +49,57 @@ create table if not exists _enrichment_jobs (
 """.strip()
 
 
-class Enrichment:
+class Enrichment(ABC):
     batch_size = 100
     # Cancel run after this many errors
     default_max_errors = 5
 
+    @property
+    @abstractmethod
+    def slug(self):
+        # A unique short text identifier for this enrichment
+        ...
+
+    @property
+    @abstractmethod
+    def name(self):
+        # The name of this enrichment
+        ...
+
+    description = ""  # Short description of this enrichment
+
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)
 
-    async def get_config_form(self, db: Database, table: str):
+    async def get_config_form(self, db: "Database", table: str):
         return None
 
-    async def initialize(self, datasette, db, table, config):
+    async def initialize(
+        self, datasette: "Datasette", db: "Database", table: str, config: dict
+    ):
         pass
 
-    async def finalize(self, datasette, db, table, config):
+    async def finalize(
+        self, datasette: "Datasette", db: "Database", table: str, config: dict
+    ):
         pass
 
-    async def increment_cost(self, db, job_id, total_cost_rounded_up):
+    @abstractmethod
+    async def enrich_batch(
+        self,
+        datasette: "Datasette",
+        db: "Database",
+        table: str,
+        rows: list,
+        pks: list,
+        config: dict,
+        job_id: int,
+    ):
+        raise NotImplementedError
+
+    async def increment_cost(
+        self, db: "Database", job_id: int, total_cost_rounded_up: int
+    ):
         await db.execute_write(
             """
             update _enrichment_jobs
@@ -72,7 +110,13 @@ class Enrichment:
         )
 
     async def enqueue(
-        self, datasette, db, table, filter_querystring, config, actor_id=None
+        self,
+        datasette: "Datasette",
+        db: "Database",
+        table: str,
+        filter_querystring: str,
+        config: dict,
+        actor_id: str = None,
     ):
         # Enqueue a job
         qs = filter_querystring
@@ -114,7 +158,9 @@ class Enrichment:
         job_id = await db.execute_write_fn(_insert)
         await self.start_enrichment_in_process(datasette, db, job_id)
 
-    async def start_enrichment_in_process(self, datasette, db, job_id):
+    async def start_enrichment_in_process(
+        self, datasette: "Datasette", db: "Database", job_id: int
+    ):
         loop = asyncio.get_event_loop()
         job_row = (
             await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
