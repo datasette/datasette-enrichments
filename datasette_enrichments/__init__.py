@@ -232,11 +232,12 @@ class Enrichment(ABC):
                         """,
                         (len(rows), job["id"]),
                     )
-                    await self.finalize(
-                        datasette,
-                        db,
-                        job["table_name"],
-                        json.loads(job["config"]),
+                    await async_call_with_supported_arguments(
+                        self.finalize,
+                        datasette=datasette,
+                        db=db,
+                        table=job["table_name"],
+                        config=json.loads(job["config"]),
                     )
                     break
 
