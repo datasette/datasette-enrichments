@@ -60,7 +60,7 @@
     <div class="config-form">
       {% for field in enrichment_form %}
         <div class="label{% if field.errors %} errors{% endif %}">
-          <label for="{{ field.id }}">{{ field.label }}</label>
+          {{ field.label }}
         </div>
         <div class="field{% if field.errors %} errors{% endif %}">
           {{ field }}
