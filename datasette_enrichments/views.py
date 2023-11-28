@@ -52,7 +52,11 @@ async def enrichment_view(datasette, request):
     if request.method == "POST":
         return await enrich_data_post(datasette, request, enrichment, filtered_data)
 
-    form = (await enrichment.get_config_form(datasette.get_database(database), table))()
+    form = (
+        await async_call_with_supported_arguments(
+            enrichment.get_config_form, db=datasette.get_database(database), table=table
+        )
+    )()
 
     return Response.html(
         await datasette.render_template(
@@ -145,7 +149,9 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     body = await request.post_body()
     post_vars = MultiParams(urllib.parse.parse_qs(body.decode("utf-8")))
 
-    Form = await enrichment.get_config_form(db, table)
+    Form = await async_call_with_supported_arguments(
+        enrichment.get_config_form, db=db, table=table
+    )
 
     form = Form(post_vars)
 
