@@ -206,7 +206,7 @@ class Enrichment(ABC):
                     db=db,
                     table=job["table_name"],
                     rows=rows,
-                    pks=pks,
+                    pks=pks or ["rowid"],
                     config=json.loads(job["config"]),
                     job_id=job_id,
                 )

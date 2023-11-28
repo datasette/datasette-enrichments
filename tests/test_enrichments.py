@@ -6,13 +6,17 @@ import sqlite3
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_root", [True, False])
-async def test_uppercase_plugin(tmpdir, is_root):
+@pytest.mark.parametrize("table", ("t", "rowid_table"))
+async def test_uppercase_plugin(tmpdir, is_root, table):
     data = str(tmpdir / "data.db")
     db = sqlite3.connect(data)
     with db:
         db.execute("create table t (id integer primary key, s text)")
         db.execute("insert into t (s) values ('hello')")
         db.execute("insert into t (s) values ('goodbye')")
+        db.execute("create table rowid_table (s text)")
+        db.execute("insert into rowid_table (s) values ('one')")
+        db.execute("insert into rowid_table (s) values ('two')")
     datasette = Datasette(
         [data],
         metadata={
@@ -25,19 +29,23 @@ async def test_uppercase_plugin(tmpdir, is_root):
     )
 
     if not is_root:
-        response1 = await datasette.client.get("/-/enrich/data/t")
+        response1 = await datasette.client.get("/-/enrich/data/{}".format(table))
         assert response1.status_code == 403
         return
 
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
-    response1 = await datasette.client.get("/-/enrich/data/t", cookies=cookies)
+    response1 = await datasette.client.get(
+        "/-/enrich/data/{}".format(table), cookies=cookies
+    )
     assert (
-        '<a href="/-/enrich/data/t/uppercasedemo">Convert to uppercase</a>'
+        '<a href="/-/enrich/data/{}/uppercasedemo">Convert to uppercase</a>'.format(
+            table
+        )
         in response1.text
     )
 
     response2 = await datasette.client.get(
-        "/-/enrich/data/t/uppercasedemo", cookies=cookies
+        "/-/enrich/data/{}/uppercasedemo".format(table), cookies=cookies
     )
     assert "<h2>Convert to uppercase</h2>" in response2.text
 
@@ -48,16 +56,16 @@ async def test_uppercase_plugin(tmpdir, is_root):
     assert not hasattr(datasette, "_initialize_called_with")
 
     response3 = await datasette.client.post(
-        "/-/enrich/data/t/uppercasedemo",
+        "/-/enrich/data/{}/uppercasedemo".format(table),
         cookies=cookies,
         data={"columns": "s", "csrftoken": csrftoken},
     )
     assert response3.status_code == 302
-    assert response3.headers["location"] == "/data/t"
+    assert response3.headers["location"] == "/data/{}".format(table)
     # It should be queued up
     assert db.execute(
         "select status, enrichment, database_name, table_name, config from _enrichment_jobs"
-    ).fetchall() == [("pending", "uppercasedemo", "data", "t", '{"columns": "s"}')]
+    ).fetchall() == [("pending", "uppercasedemo", "data", table, '{"columns": "s"}')]
     # Wait a moment and it should start running
     tries = 0
     ok = False
@@ -77,6 +85,7 @@ async def test_uppercase_plugin(tmpdir, is_root):
     ok2 = False
     while tries < 10:
         await asyncio.sleep(0.1)
+        tries += 1
         if hasattr(datasette, "_finalize_called_with"):
             ok2 = True
             break
