@@ -128,9 +128,10 @@ class Enrichment(ABC):
 
         response = await get_with_auth(datasette, table_path + ".json" + "?" + qs)
         filtered_data = response.json()
-        row_count = filtered_data.get(
-            "count", filtered_data["filtered_table_rows_count"]
-        )
+        if "count" in filtered_data:
+            row_count = filtered_data["count"]
+        else:
+            row_count = filtered_data["filtered_table_rows_count"]
         await db.execute_write(CREATE_JOB_TABLE_SQL)
 
         def _insert(conn):
