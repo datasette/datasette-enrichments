@@ -147,7 +147,7 @@ The `get_config_form()` method can take the following optional named parameters:
 - `db`: a [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class)
 - `table`: the string name of the table that the enrichment is being run against
 
-## finalize()
+### finalize()
 
 Your class can optionally implement a `finalize()` method. This will be called once at the end of each enrichment run.
 
