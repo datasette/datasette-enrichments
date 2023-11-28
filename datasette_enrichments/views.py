@@ -36,7 +36,13 @@ async def enrichment_view(datasette, request):
     bits = [bit for bit in bits if bit[0] != "_sort"]
     # Add extras
     bits.extend(
-        [("_extra", "human_description_en"), ("_extra", "count"), ("_extra", "columns")]
+        [
+            ("_extra", "human_description_en"),
+            ("_extra", "count"),
+            ("_extra", "columns"),
+            # This one makes it work for Datasette < 1.0:
+            ("_shape", "objects"),
+        ]
     )
     # re-encode
     query_string = urllib.parse.urlencode(bits)
@@ -46,6 +52,9 @@ async def enrichment_view(datasette, request):
             datasette.urls.table(database, table, "json") + "?" + query_string,
         )
     ).json()
+    if "count" not in filtered_data:
+        # Fix for Datasette < 1.0
+        filtered_data["count"] = filtered_data["filtered_table_rows_count"]
 
     # If an enrichment is selected, use that UI
 
@@ -102,6 +111,9 @@ async def enrichment_picker(datasette, request):
         datasette.urls.table(database, table, "json") + "?" + query_string,
     )
     filtered_data = response.json()
+    if "count" not in filtered_data:
+        # Fix for Datasette < 1.0
+        filtered_data["count"] = filtered_data["filtered_table_rows_count"]
 
     enrichments_and_paths = []
     for enrichment in enrichments.values():

@@ -127,7 +127,10 @@ class Enrichment(ABC):
         table_path = datasette.urls.table(db.name, table)
 
         response = await get_with_auth(datasette, table_path + ".json" + "?" + qs)
-        row_count = response.json()["count"]
+        filtered_data = response.json()
+        row_count = filtered_data.get(
+            "count", filtered_data["filtered_table_rows_count"]
+        )
         await db.execute_write(CREATE_JOB_TABLE_SQL)
 
         def _insert(conn):
@@ -189,7 +192,7 @@ class Enrichment(ABC):
                 qs = job["filter_querystring"]
                 if next_cursor:
                     qs += "&_next={}".format(next_cursor)
-                qs += "&_size={}".format(self.batch_size)
+                qs += "&_size={}&_shape=objects".format(self.batch_size)
                 response = await get_with_auth(datasette, table_path + "?" + qs)
                 rows = response.json()["rows"]
                 if not rows:
