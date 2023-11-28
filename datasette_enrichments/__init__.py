@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import asyncio
 from datasette import hookimpl
+from datasette.utils import async_call_with_supported_arguments
 import json
 import secrets
 from datasette.plugins import pm
@@ -195,14 +196,15 @@ class Enrichment(ABC):
                     break
                 # Enrich batch
                 pks = await db.primary_keys(job["table_name"])
-                await self.enrich_batch(
-                    datasette,
-                    db,
-                    job["table_name"],
-                    rows,
-                    pks,
-                    json.loads(job["config"]),
-                    job_id,
+                await async_call_with_supported_arguments(
+                    self.enrich_batch,
+                    datasette=datasette,
+                    db=db,
+                    table=job["table_name"],
+                    rows=rows,
+                    pks=pks,
+                    config=json.loads(job["config"]),
+                    job_id=job_id,
                 )
                 # Update next_cursor
                 next_cursor = response.json()["next"]
