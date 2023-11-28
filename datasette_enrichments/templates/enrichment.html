@@ -53,6 +53,8 @@
 <h2>{{ enrichment.name }}</h2>
 <p>{{ enrichment.description }}</p>
 
+{% block above_form %}{% endblock %}
+
 <form action="{{ request.full_path }}" method="POST">
   {% if enrichment_form %}
     <div class="config-form">
@@ -81,5 +83,7 @@
     <input type="submit" value="Enrich data">
     </p>
 </form>
+
+{% block below_form %}{% endblock %}
 
 {% endblock %}
