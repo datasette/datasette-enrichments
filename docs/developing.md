@@ -120,8 +120,7 @@ from wtforms import Form, StringField, TextAreaField
 from wtforms.validators import DataRequired
 
 # ...
-        async def get_config_form(self, db, table):
-
+    async def get_config_form(self):
         class ConfigForm(Form):
             template = TextAreaField(
                 "Template",
@@ -134,10 +133,15 @@ from wtforms.validators import DataRequired
                 validators=[DataRequired(message="Column is required.")],
                 default="template_output",
             )
-
         return ConfigForm
 ```
 The valid dictionary that is produced by filling in this form will be passed as `config` to both the `initialize()` and `enrich_batch()` methods.
+
+The `get_config_form()` method can take the following optional named parameters:
+
+- `datasette`: a [Datasette instance](https://docs.datasette.io/en/stable/internals.html#datasette-class)
+- `db`: a [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class)
+- `table`: the string name of the table that the enrichment is being run against
 
 ## finalize()
 

@@ -72,7 +72,7 @@ class Enrichment(ABC):
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)
 
-    async def get_config_form(self, db: "Database", table: str):
+    async def get_config_form(self, datasette: "Datasette", db: "Database", table: str):
         return None
 
     async def initialize(
