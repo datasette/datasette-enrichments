@@ -72,6 +72,8 @@ async def initialize(
     config: dict
 ):
 ```
+The named parameters passed to `initialize()` are all optional. If you declare them they will be passed as follows:
+
 - `datasette` is the [Datasette instance](https://docs.datasette.io/en/stable/internals.html#datasette-class).
 - `db` is the [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class) for the database that the enrichment is being run against.
 - `table` is the name of the table.
@@ -94,13 +96,15 @@ async def enrich_batch(
 ):
     # Enrichment logic goes here
 ```
+Again, you can use just the subset of the named parameters that you need.
+
 This method will be called multiple times, each time with a different list of rows.
 
 It should perform whatever enrichment logic is required, using the `db` object ([documented here](https://docs.datasette.io/en/stable/internals.html#database-class)) to write any results back to the database.
 
 `enrich_batch()` is an `async def` method, so you can use `await` within the method to perform asynchronous operations such as HTTP calls ([using HTTPX](https://www.python-httpx.org/async/)) or database queries.
 
-The arguments passed to `enrich_batch()` are as follows:
+The parameters available to `enrich_batch()` are as follows:
 
 - `datasette` is the [Datasette instance](https://docs.datasette.io/en/stable/internals.html#datasette-class). You can use this to read plugin configuration, check permissions, render templates and more.
 - `db` is the [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class) for the database that the enrichment is being run against. You can use this to execute SQL queries against the database.
@@ -151,6 +155,8 @@ Your class can optionally implement a `finalize()` method. This will be called o
 async def finalize(self, datasette, db, table, config):
     # ...
 ```
+Again, these named parameters are all optional:
+
 - `datasette` is the [Datasette instance]
 - `db` is the [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class)
 - `table` is the name of the table (a string)
