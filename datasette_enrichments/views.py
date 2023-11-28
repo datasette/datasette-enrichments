@@ -1,5 +1,5 @@
 from datasette import Response, NotFound, Forbidden
-from datasette.utils import path_with_added_args, MultiParams
+from datasette.utils import path_with_removed_args, MultiParams
 from .utils import get_with_auth
 import urllib.parse
 
@@ -97,9 +97,9 @@ async def enrichment_picker(datasette, request):
         enrichments_and_paths.append(
             {
                 "enrichment": enrichment,
-                "path": path_with_added_args(
+                "path": path_with_removed_args(
                     request=request,
-                    args={"_enrichment": enrichment.slug, "_sort": None},
+                    args={"_sort"},
                     path="{}/{}".format(request.path, enrichment.slug),
                 ),
             }
