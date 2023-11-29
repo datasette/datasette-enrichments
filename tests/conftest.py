@@ -46,6 +46,8 @@ def load_uppercase_plugin():
             config: dict,
             job_id: int,
         ):
+            if getattr(datasette, "_trigger_enrich_batch_error", None):
+                raise Exception("Error in enrich_batch()")
             columns = config.get("columns") or []
             if not columns:
                 return

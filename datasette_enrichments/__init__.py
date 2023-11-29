@@ -4,20 +4,24 @@ from datasette import hookimpl
 from datasette.utils import async_call_with_supported_arguments, tilde_encode
 import json
 import secrets
+import traceback
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
-from .utils import get_with_auth, mark_job_complete
+from .utils import get_with_auth, mark_job_complete, pks_for_rows
 from . import hookspecs
 
 from datasette.utils import await_me_maybe
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Tuple, Union, List
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
     from datasette.database import Database
 
 pm.add_hookspecs(hookspecs)
+
+
+IdType = Union[int, str, Tuple[Union[int, str], ...]]
 
 
 async def get_enrichments(datasette):
@@ -49,11 +53,22 @@ create table if not exists _enrichment_jobs (
 )
 """.strip()
 
+CREATE_ERROR_TABLE_SQL = """
+create table if not exists _enrichment_errors (
+    id integer primary key,
+    job_id integer references _enrichment_jobs(id),
+    created_at text,
+    row_pks text, -- JSON list of row primary keys
+    error text
+)
+""".strip()
+
 
 class Enrichment(ABC):
-    batch_size = 100
+    batch_size: int = 100
     # Cancel run after this many errors
-    default_max_errors = 5
+    default_max_errors: int = 5
+    log_traceback: bool = False
 
     @property
     @abstractmethod
@@ -71,6 +86,28 @@ class Enrichment(ABC):
 
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)
+
+    async def log_error(
+        self, db: "Database", job_id: int, ids: List[IdType], error: str
+    ):
+        if self.log_traceback:
+            error += "\n\n" + traceback.format_exc()
+        # Record error and increment error_count
+        await db.execute_write(
+            """
+            insert into _enrichment_errors (job_id, row_pks, error)
+            values (?, ?, ?)
+        """,
+            (job_id, json.dumps(ids), error),
+        )
+        await db.execute_write(
+            """
+            update _enrichment_jobs
+            set error_count = error_count + ?
+            where id = ?
+        """,
+            (len(ids), job_id),
+        )
 
     async def get_config_form(self, datasette: "Datasette", db: "Database", table: str):
         return None
@@ -133,6 +170,7 @@ class Enrichment(ABC):
         else:
             row_count = filtered_data["filtered_table_rows_count"]
         await db.execute_write(CREATE_JOB_TABLE_SQL)
+        await db.execute_write(CREATE_ERROR_TABLE_SQL)
 
         def _insert(conn):
             with conn:
@@ -201,16 +239,19 @@ class Enrichment(ABC):
                     break
                 # Enrich batch
                 pks = await db.primary_keys(job["table_name"])
-                await async_call_with_supported_arguments(
-                    self.enrich_batch,
-                    datasette=datasette,
-                    db=db,
-                    table=job["table_name"],
-                    rows=rows,
-                    pks=pks or ["rowid"],
-                    config=json.loads(job["config"]),
-                    job_id=job_id,
-                )
+                try:
+                    await async_call_with_supported_arguments(
+                        self.enrich_batch,
+                        datasette=datasette,
+                        db=db,
+                        table=job["table_name"],
+                        rows=rows,
+                        pks=pks or ["rowid"],
+                        config=json.loads(job["config"]),
+                        job_id=job_id,
+                    )
+                except Exception as ex:
+                    await self.log_error(db, job_id, pks_for_rows(rows, pks), str(ex))
                 # Update next_cursor
                 next_cursor = response.json()["next"]
                 if next_cursor:
