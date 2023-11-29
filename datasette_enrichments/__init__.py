@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import asyncio
 from datasette import hookimpl
-from datasette.utils import async_call_with_supported_arguments
+from datasette.utils import async_call_with_supported_arguments, tilde_encode
 import json
 import secrets
 from datasette.plugins import pm
@@ -272,7 +272,7 @@ def table_actions(datasette, actor, database, table, request):
                     "href": datasette.urls.path(
                         "/-/enrich/{}/{}{}".format(
                             database,
-                            table,
+                            tilde_encode(table),
                             "?{}".format(request.query_string)
                             if request.query_string
                             else "",

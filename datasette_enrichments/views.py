@@ -3,6 +3,8 @@ from datasette.utils import (
     async_call_with_supported_arguments,
     path_with_removed_args,
     MultiParams,
+    tilde_decode,
+    tilde_encode,
 )
 from .utils import get_with_auth
 import urllib.parse
@@ -19,7 +21,7 @@ async def enrichment_view(datasette, request):
     from . import get_enrichments
 
     database = request.url_vars["database"]
-    table = request.url_vars["table"]
+    table = tilde_decode(request.url_vars["table"])
     slug = request.url_vars["enrichment"]
 
     await check_permissions(datasette, request, database)
@@ -89,7 +91,7 @@ async def enrichment_picker(datasette, request):
     from . import get_enrichments
 
     database = request.url_vars["database"]
-    table = request.url_vars["table"]
+    table = tilde_decode(request.url_vars["table"])
 
     await check_permissions(datasette, request, database)
 
@@ -106,10 +108,13 @@ async def enrichment_picker(datasette, request):
     )
     # re-encode
     query_string = urllib.parse.urlencode(bits)
-    response = await get_with_auth(
-        datasette,
-        datasette.urls.table(database, table, "json") + "?" + query_string,
-    )
+    url = datasette.urls.table(database, table, "json") + "?" + query_string
+    response = await get_with_auth(datasette, url)
+    if response.status_code != 200:
+        return Response.text(
+            "Error fetching data from {}: {}".format(url, response.text),
+            status=500,
+        )
     filtered_data = response.json()
     if "count" not in filtered_data:
         # Fix for Datasette < 1.0
@@ -150,7 +155,7 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     await check_permissions(datasette, request, database)
 
     db = datasette.get_database(database)
-    table = request.url_vars["table"]
+    table = tilde_decode(request.url_vars["table"])
 
     # Enqueue the enrichment to be run
     filters = []
