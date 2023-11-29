@@ -76,3 +76,14 @@ def _ensure_enrichment_properties(datasette: "Datasette"):
         datasette._enrichment_completed_jobs = set()
     if not hasattr(datasette, "_enrichment_completed_events"):
         datasette._enrichment_completed_events = {}
+
+
+def pks_for_rows(rows, pks):
+    if not pks:
+        pks = ["rowid"]
+    is_single = len(pks) == 1
+    if is_single:
+        pk = pks[0]
+        return [row[pk] for row in rows]
+    else:
+        return [tuple(row[pk] for pk in pks) for row in rows]
