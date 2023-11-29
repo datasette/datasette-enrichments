@@ -193,7 +193,7 @@ async def log_error(
     self, db: Database, job_id: int, ids: List[IdType], error: str
 )
 ```
-Call this with a reference to the current database, the JOB ID and a list of row IDs (which can be strings, integers or tuples for compound primary key tables) and the error message string.
+Call this with a reference to the current database, the job ID, a list of row IDs (which can be strings, integers or tuples for compound primary key tables) and the error message string.
 
 If you set `log_traceback = True` on your `Enrichment` class a full stacktrace for the most recent exception will be recorded in the database table in addition to the string error message. This is useful during plugin development:
 
