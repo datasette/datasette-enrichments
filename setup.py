@@ -41,6 +41,7 @@ setup(
             "sphinx-autobuild",
             "sphinx-copybutton",
             "myst-parser",
+            "cogapp",
         ],
     },
     package_data={"datasette_enrichments": ["templates/*"]},

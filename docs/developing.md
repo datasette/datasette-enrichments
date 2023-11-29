@@ -162,6 +162,47 @@ Again, these named parameters are all optional:
 - `table` is the name of the table (a string)
 - `config` is an optional dictionary of configuration options that the user set for the run
 
+## Tracking errors
+
+Errors that occur while running an enrichment are recorded in the `_enrichment_errors` table, with the following schema:
+
+<!-- [[[cog
+import cog, datasette_enrichments
+cog.out(
+    "```sql\n{}\n```".format(datasette_enrichments.CREATE_ERROR_TABLE_SQL.replace(
+        ' if not exists', ''
+    ))
+)
+]]] -->
+```sql
+create table _enrichment_errors (
+    id integer primary key,
+    job_id integer references _enrichment_jobs(id),
+    created_at text,
+    row_pks text, -- JSON list of row primary keys
+    error text
+)
+```
+<!-- [[[end]]] -->
+If your `.enrich_batch()` raises any exception, all of the IDs in that batch will be marked as errored in this table.
+
+Alternatively you can catch errors for individual rows within your `enrich_batch()` method and record them yourself using the `await self.log_error()` method, which has the following signature:
+
+```
+async def log_error(
+    self, db: Database, job_id: int, ids: List[IdType], error: str
+)
+```
+Call this with a reference to the current database, the JOB ID and a list of row IDs (which can be strings, integers or tuples for compound primary key tables) and the error message string.
+
+If you set `log_traceback = True` on your `Enrichment` class a full stacktrace for the most recent exception will be recorded in the database table in addition to the string error message. This is useful during plugin development:
+
+```python
+class MyEnrichment(Enrichment):
+    ...
+    log_traceback = True
+```
+
 ## Testing enrichments
 
 Take a look at the [test suite for datasette-enrichments-re2](https://github.com/datasette/datasette-enrichments-re2/blob/main/tests/test_enrichments_re2.py) for an example of how to test an enrichment.
