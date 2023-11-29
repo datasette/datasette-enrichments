@@ -162,7 +162,7 @@ Again, these named parameters are all optional:
 - `table` is the name of the table (a string)
 - `config` is an optional dictionary of configuration options that the user set for the run
 
-## Testing enrichments
+## Writing tests for enrichments
 
 Take a look at the [test suite for datasette-enrichments-re2](https://github.com/datasette/datasette-enrichments-re2/blob/main/tests/test_enrichments_re2.py) for an example of how to test an enrichment.
 
