@@ -7,7 +7,12 @@
 
 Tools for running enrichments against data stored in Datasette
 
-**PROJECT STATUS:** This is a very early alpha. The work is mainly happening in [the issues](https://github.com/simonw/datasette-enrichments/issues).
+Potential use-cases for enrichments include:
+
+- Geocoding an address and populating a latitude and longitude column
+- Executing a template to generate output based on the values in each row
+- Fetching data from a URL and populating a column with the result
+- Executing OCR against a linked image or PDF file
 
 Documentation for this plugin lives at **[enrichments.datasette.io](https://enrichments.datasette.io/)**.
 
