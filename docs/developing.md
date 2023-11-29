@@ -203,7 +203,7 @@ class MyEnrichment(Enrichment):
     log_traceback = True
 ```
 
-## Testing enrichments
+## Writing tests for enrichments
 
 Take a look at the [test suite for datasette-enrichments-re2](https://github.com/datasette/datasette-enrichments-re2/blob/main/tests/test_enrichments_re2.py) for an example of how to test an enrichment.
 
