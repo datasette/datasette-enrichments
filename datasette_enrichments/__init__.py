@@ -4,6 +4,7 @@ from datasette import hookimpl
 from datasette.utils import async_call_with_supported_arguments, tilde_encode
 import json
 import secrets
+import traceback
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
@@ -64,9 +65,10 @@ create table if not exists _enrichment_errors (
 
 
 class Enrichment(ABC):
-    batch_size = 100
+    batch_size: int = 100
     # Cancel run after this many errors
-    default_max_errors = 5
+    default_max_errors: int = 5
+    log_traceback: bool = False
 
     @property
     @abstractmethod
@@ -88,6 +90,8 @@ class Enrichment(ABC):
     async def log_error(
         self, db: "Database", job_id: int, ids: List[IdType], error: str
     ):
+        if self.log_traceback:
+            error += "\n\n" + traceback.format_exc()
         # Record error and increment error_count
         await db.execute_write(
             """
