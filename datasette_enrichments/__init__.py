@@ -49,6 +49,16 @@ create table if not exists _enrichment_jobs (
 )
 """.strip()
 
+CREATE_ERROR_TABLE_SQL = """
+create table if not exists _enrichment_errors (
+    id integer primary key,
+    job_id integer references _enrichment_jobs(id),
+    created_at text,
+    row_pk text, -- JSON encoded, can be integer or string or ["compound", "pk"]
+    error text
+)
+""".strip()
+
 
 class Enrichment(ABC):
     batch_size = 100
@@ -71,6 +81,24 @@ class Enrichment(ABC):
 
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)
+
+    async def log_error(self, db: "Database", job_id: int, ids: Any, error: str):
+        # Record error and increment error_count
+        await db.execute_write(
+            """
+            insert into _enrichment_errors (job_id, row_pk, error)
+            values (?, ?, ?)
+        """,
+            (job_id, json.dumps(ids), error),
+        )
+        await db.execute_write(
+            """
+            update _enrichment_jobs
+            set error_count = error_count + 1
+            where id = ?
+        """,
+            (job_id,),
+        )
 
     async def get_config_form(self, datasette: "Datasette", db: "Database", table: str):
         return None
@@ -133,6 +161,7 @@ class Enrichment(ABC):
         else:
             row_count = filtered_data["filtered_table_rows_count"]
         await db.execute_write(CREATE_JOB_TABLE_SQL)
+        await db.execute_write(CREATE_ERROR_TABLE_SQL)
 
         def _insert(conn):
             with conn:
