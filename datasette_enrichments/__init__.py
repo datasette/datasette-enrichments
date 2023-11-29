@@ -6,12 +6,12 @@ import json
 import secrets
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
-from .utils import get_with_auth
+from .utils import get_with_auth, mark_job_complete
 from . import hookspecs
 
 from datasette.utils import await_me_maybe
 
-from typing import TYPE_CHECKING, Optional, Dict
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
@@ -118,7 +118,7 @@ class Enrichment(ABC):
         filter_querystring: str,
         config: dict,
         actor_id: str = None,
-    ):
+    ) -> int:
         # Enqueue a job
         qs = filter_querystring
         if qs:
@@ -162,6 +162,7 @@ class Enrichment(ABC):
 
         job_id = await db.execute_write_fn(_insert)
         await self.start_enrichment_in_process(datasette, db, job_id)
+        return job_id
 
     async def start_enrichment_in_process(
         self, datasette: "Datasette", db: "Database", job_id: int
@@ -243,6 +244,7 @@ class Enrichment(ABC):
                         table=job["table_name"],
                         config=json.loads(job["config"]),
                     )
+                    await mark_job_complete(datasette, job["id"], job["database_name"])
                     break
 
         loop.create_task(run_enrichment())

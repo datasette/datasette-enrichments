@@ -192,7 +192,7 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
         enrichment.initialize, datasette=datasette, db=db, table=table, config=config
     )
 
-    await enrichment.enqueue(
+    job_id = await enrichment.enqueue(
         datasette,
         db,
         table,
@@ -211,4 +211,6 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
         ),
         datasette.INFO,
     )
-    return Response.redirect(datasette.urls.table(db.name, table))
+    return Response.redirect(
+        datasette.urls.table(db.name, table) + "?_enrichment_job={}".format(job_id)
+    )

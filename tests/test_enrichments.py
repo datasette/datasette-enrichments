@@ -1,4 +1,5 @@
 import asyncio
+from datasette_enrichments.utils import wait_for_job
 from datasette.app import Datasette
 import pytest
 import sqlite3
@@ -61,11 +62,23 @@ async def test_uppercase_plugin(tmpdir, is_root, table):
         data={"columns": "s", "csrftoken": csrftoken},
     )
     assert response3.status_code == 302
-    assert response3.headers["location"] == "/data/{}".format(table)
+    assert response3.headers["location"].startswith(
+        "/data/{}?_enrichment_job=".format(table)
+    )
     # It should be queued up
-    assert db.execute(
-        "select status, enrichment, database_name, table_name, config from _enrichment_jobs"
-    ).fetchall() == [("pending", "uppercasedemo", "data", table, '{"columns": "s"}')]
+    job_id = response3.headers["location"].split("=")[-1]
+    status, enrichment, database_name, table_name, config = db.execute(
+        """
+        select status, enrichment, database_name, table_name, config
+        from _enrichment_jobs where id = ?
+    """,
+        (job_id,),
+    ).fetchone()
+    assert status == "pending"
+    assert enrichment == "uppercasedemo"
+    assert database_name == "data"
+    assert table_name == table
+    assert config == '{"columns": "s"}'
     # Wait a moment and it should start running
     tries = 0
     ok = False
@@ -80,13 +93,6 @@ async def test_uppercase_plugin(tmpdir, is_root, table):
     assert ok, "Enrichment did not start running"
     assert hasattr(datasette, "_initialize_called_with")
     assert not hasattr(datasette, "_finalize_called_with")
-    # Wait for it to finish
-    tries = 0
-    ok2 = False
-    while tries < 10:
-        await asyncio.sleep(0.1)
-        tries += 1
-        if hasattr(datasette, "_finalize_called_with"):
-            ok2 = True
-            break
-    assert ok2, "Enrichment did not complete"
+
+    await wait_for_job(datasette, job_id, database_name, timeout=1)
+    assert hasattr(datasette, "_finalize_called_with"), "Enrichment did not complete"

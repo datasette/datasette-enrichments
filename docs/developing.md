@@ -161,3 +161,77 @@ Again, these named parameters are all optional:
 - `db` is the [Database instance](https://docs.datasette.io/en/stable/internals.html#database-class)
 - `table` is the name of the table (a string)
 - `config` is an optional dictionary of configuration options that the user set for the run
+
+## Testing enrichments
+
+Take a look at the [test suite for datasette-enrichments-re2](https://github.com/datasette/datasette-enrichments-re2/blob/main/tests/test_enrichments_re2.py) for an example of how to test an enrichment.
+
+You can use the `datasette_enrichments.wait_for_job()` utility function to avoid having to run a polling loop in your tests to wait for the enrichment to complete.
+
+Here's an example test for an enrichment, using `datasette.client.post()` to start the enrichment running:
+
+```python
+from datasette.app import Datasette
+from datasette_enrichments.utils import wait_for_job
+import pytest
+
+@pytest.mark.asyncio
+async def test_enrichment():
+    # Create a Datasette instance with an in-memory database to tests against
+    datasette = Datasette()
+    db = datasette.add_memory_database("demo")
+    await db.execute_write("create table if not exists news (body text)")
+    for text in ("example a", "example b", "example c"):
+        await db.execute_write("insert into news (body) values (?)", [text])
+
+    # Obtain ds_actor and ds_csrftoken cookies
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    csrftoken = (
+        await datasette.client.get(
+            "/-/enrich/demo/news/name-of-enrichment",
+            cookies=cookies
+        )
+    ).cookies["ds_csrftoken"]
+    cookies["ds_csrftoken"] = csrftoken
+
+    response = await datasette.client.post(
+        "/-/enrich/demo/news/name-of-enrichment",
+        data={
+            "source_column": "body",
+            "csrftoken": cookies["ds_csrftoken"],
+        },
+        cookies=cookies,
+    )
+    assert response.status_code == 302
+
+    # Get the job_id so we can wait for it to complete
+    job_id = response.headers["Location"].split("=")[-1]
+    await wait_for_job(datasette, job_id, database="demo", timeout=1)
+    db = datasette.get_database("demo")
+    jobs = await db.execute("select * from _enrichment_jobs")
+    job = dict(jobs.first())
+    assert job["status"] == "finished"
+    assert job["enrichment"] == "name-of-enrichment"
+    assert job["done_count"] == 3
+    results = await db.execute("select * from news order by body")
+    rows = [dict(r) for r in results.rows]
+    assert rows == [
+        {"body": "example a transformed"},
+        {"body": "example b transformed"},
+        {"body": "example c transformed"}
+    ]
+```
+
+The full signature for `wait_for_job()` is:
+
+```python
+async def wait_for_job(
+    datasette: Datasette,
+    job_id: int,
+    database: Optional[str] = None,
+    timeout: Optional[int] = None,
+):
+```
+The `timeout` argument to `wait_for_job()` is optional - this will cause the test to fail if the job does not complete within the specified number of seconds.
+
+If you omit the `database` name the single first database will be used, which is often the right thing to do for tests.
