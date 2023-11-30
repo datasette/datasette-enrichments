@@ -205,7 +205,7 @@ class MyEnrichment(Enrichment):
 
 ## Writing tests for enrichments
 
-Take a look at the [test suite for datasette-enrichments-re2](https://github.com/datasette/datasette-enrichments-re2/blob/main/tests/test_enrichments_re2.py) for an example of how to test an enrichment.
+Take a look at the [test suite for datasette-enrichments-opencage](https://github.com/datasette/datasette-enrichments-opencage/blob/main/tests/test_enrichments_opencage.py) for an example of how to test an enrichment.
 
 You can use the `datasette_enrichments.wait_for_job()` utility function to avoid having to run a polling loop in your tests to wait for the enrichment to complete.
 
@@ -215,15 +215,17 @@ Here's an example test for an enrichment, using `datasette.client.post()` to sta
 from datasette.app import Datasette
 from datasette_enrichments.utils import wait_for_job
 import pytest
+import sqlite3
 
 @pytest.mark.asyncio
-async def test_enrichment():
-    # Create a Datasette instance with an in-memory database to tests against
-    datasette = Datasette()
-    db = datasette.add_memory_database("demo")
-    await db.execute_write("create table if not exists news (body text)")
-    for text in ("example a", "example b", "example c"):
-        await db.execute_write("insert into news (body) values (?)", [text])
+async def test_enrichment(tmpdir):
+    db_path = str(tmpdir / "demo.db")
+    datasette = Datasette([db_path])
+    db = sqlite3.connect(db_path)
+    with db:
+        db.execute("create table if not exists news (body text)")
+        for text in ("example a", "example b", "example c"):
+            db.execute("insert into news (body) values (?)", [text])
 
     # Obtain ds_actor and ds_csrftoken cookies
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
@@ -235,6 +237,7 @@ async def test_enrichment():
     ).cookies["ds_csrftoken"]
     cookies["ds_csrftoken"] = csrftoken
 
+    # Execute the enrichment
     response = await datasette.client.post(
         "/-/enrich/demo/news/name-of-enrichment",
         data={
