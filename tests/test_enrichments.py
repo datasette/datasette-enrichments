@@ -2,6 +2,8 @@ import asyncio
 from datasette_enrichments.utils import wait_for_job
 from datasette.app import Datasette
 from datasette.utils import tilde_encode
+from datasette import version
+from packaging.version import parse
 import pytest, pytest_asyncio
 import sqlite3
 
@@ -20,6 +22,13 @@ async def datasette(tmpdir):
         db.execute("create table [foo/bar] (s text)")
         db.execute("insert into [foo/bar] (s) values ('one')")
         db.execute("insert into [foo/bar] (s) values ('two')")
+        db.execute(
+            "create table compound_pk_table (category text, name text, value integer, primary key (category, name))"
+        )
+        db.execute(
+            "insert into compound_pk_table (category, name, value) values ('dog', 'a', 34)"
+        )
+
     datasette = Datasette(
         [data],
         metadata={
@@ -139,3 +148,33 @@ async def test_error_log(datasette):
         "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
     ).fetchone()
     assert job_details == (2, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    parse(version.__version__) < parse("1.0a13"),
+    reason="uses row_actions() plugin hook",
+)
+@pytest.mark.parametrize(
+    "path,expected_path",
+    (
+        ("/data/t/1", "t?id=1"),
+        ("/data/rowid_table/1", "rowid_table?rowid=1"),
+        ("/data/compound_pk_table/dog,a", "compound_pk_table?category=dog&amp;name=a"),
+    ),
+)
+async def test_row_actions(datasette, path, expected_path):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.get(path, cookies=cookies)
+    assert response.status_code == 200
+    assert (
+        '<a href="/-/enrich/data/{}">Enrich this row'.format(expected_path)
+        in response.text
+    )
+    # And check that page offers to enrich just one row
+    enrich_path = "/-/enrich/data/" + response.text.split('<a href="/-/enrich/data/')[
+        1
+    ].split('">')[0].replace("&amp;", "&")
+    enrich_page_response = await datasette.client.get(enrich_path, cookies=cookies)
+    assert enrich_page_response.status_code == 200
+    assert "1 row selected" in enrich_page_response.text

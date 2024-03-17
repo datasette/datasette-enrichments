@@ -5,6 +5,7 @@ from datasette.utils import async_call_with_supported_arguments, tilde_encode
 import json
 import secrets
 import traceback
+import urllib
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
@@ -320,6 +321,38 @@ def table_actions(datasette, actor, database, table, request):
                         )
                     ),
                     "label": "Enrich selected data",
+                }
+            ]
+
+    return inner
+
+
+@hookimpl
+def row_actions(datasette, database, table, actor, row):
+    async def inner():
+        if await datasette.permission_allowed(
+            actor, "enrichments", resource=database, default=False
+        ):
+            # query_string to select row based on its primary keys
+            db = datasette.get_database(database)
+            pks = await db.primary_keys(table)
+            if not pks:
+                pks = ["rowid"]
+            # Build the querystring to select this row
+            bits = []
+            for pk in pks:
+                bits.append((pk, row[pk]))
+            query_string = urllib.parse.urlencode(bits)
+            return [
+                {
+                    "href": datasette.urls.path(
+                        "/-/enrich/{}/{}?{}".format(
+                            database,
+                            tilde_encode(table),
+                            query_string,
+                        )
+                    ),
+                    "label": "Enrich this row",
                 }
             ]
 

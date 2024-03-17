@@ -34,7 +34,7 @@ setup(
     entry_points={"datasette": ["enrichments = datasette_enrichments"]},
     install_requires=["datasette", "WTForms"],
     extras_require={
-        "test": ["pytest", "pytest-asyncio", "black", "ruff"],
+        "test": ["pytest", "pytest-asyncio", "black", "ruff", "packaging"],
         "docs": [
             "sphinx==7.2.6",
             "furo==2023.9.10",
