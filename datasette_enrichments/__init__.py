@@ -315,9 +315,11 @@ def table_actions(datasette, actor, database, table, request):
                         "/-/enrich/{}/{}{}".format(
                             database,
                             tilde_encode(table),
-                            "?{}".format(request.query_string)
-                            if request.query_string
-                            else "",
+                            (
+                                "?{}".format(request.query_string)
+                                if request.query_string
+                                else ""
+                            ),
                         )
                     ),
                     "label": "Enrich selected data",
@@ -341,7 +343,10 @@ def row_actions(datasette, database, table, actor, row):
             # Build the querystring to select this row
             bits = []
             for pk in pks:
-                bits.append((pk, row[pk]))
+                if pk.startswith("_"):
+                    bits.append((pk + "__exact", row[pk]))
+                else:
+                    bits.append((pk, row[pk]))
             query_string = urllib.parse.urlencode(bits)
             return [
                 {

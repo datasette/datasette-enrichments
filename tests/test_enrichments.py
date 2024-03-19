@@ -19,9 +19,9 @@ async def datasette(tmpdir):
         db.execute("create table rowid_table (s text)")
         db.execute("insert into rowid_table (s) values ('one')")
         db.execute("insert into rowid_table (s) values ('two')")
-        db.execute("create table [foo/bar] (s text)")
-        db.execute("insert into [foo/bar] (s) values ('one')")
-        db.execute("insert into [foo/bar] (s) values ('two')")
+        db.execute("create table [foo/bar] (_id integer primary key, s text)")
+        db.execute("insert into [foo/bar] (_id, s) values (1, 'one')")
+        db.execute("insert into [foo/bar] (_id, s) values (2, 'two')")
         db.execute(
             "create table compound_pk_table (category text, name text, value integer, primary key (category, name))"
         )
@@ -161,6 +161,7 @@ async def test_error_log(datasette):
         ("/data/t/1", "t?id=1"),
         ("/data/rowid_table/1", "rowid_table?rowid=1"),
         ("/data/compound_pk_table/dog,a", "compound_pk_table?category=dog&amp;name=a"),
+        ("/data/foo~2Fbar/1", "foo~2Fbar?_id__exact=1"),
     ),
 )
 async def test_row_actions(datasette, path, expected_path):
