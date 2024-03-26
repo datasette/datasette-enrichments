@@ -323,6 +323,7 @@ def table_actions(datasette, actor, database, table, request):
                         )
                     ),
                     "label": "Enrich selected data",
+                    "description": "Run a data cleaning operation against every selected row",
                 }
             ]
 
