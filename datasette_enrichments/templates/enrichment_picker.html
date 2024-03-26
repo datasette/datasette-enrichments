@@ -24,6 +24,11 @@
 <p>{{ "{:,}".format(filtered_data.count) }} row{% if filtered_data.count != 1 %}s{% endif %} selected
 {{ filtered_data.human_description_en }}</p>
 
+{% if not enrichments_and_paths %}
+
+<p><strong>No enrichments available</strong>. You may need to install and configure additional enrichment plugins.</p>
+
+{% else %}
 <h2>Select an enrichment</h2>
 
 <dl class="enrichments">
@@ -32,5 +37,6 @@
     <dd>{{ enrichment_and_path.enrichment.description }}</dd>
   {% endfor %}
 </dl>
+{% endif %}
 
 {% endblock %}
