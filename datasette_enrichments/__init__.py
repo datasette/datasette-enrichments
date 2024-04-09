@@ -359,6 +359,7 @@ def row_actions(datasette, database, table, actor, row):
                         )
                     ),
                     "label": "Enrich this row",
+                    "description": "Run a data cleaning operation against this row",
                 }
             ]
 
