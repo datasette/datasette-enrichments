@@ -39,4 +39,32 @@
 </dl>
 {% endif %}
 
+{% if previous_runs %}
+  <h2>Previous runs against this table</h2>
+  <ul>
+    {% for run in previous_runs %}
+      <li>
+        <strong>Run ID:</strong> {{ run.id }} <br>
+        <strong>Status:</strong> {{ run.status }} <br>
+        <strong>Progress:</strong>
+        <progress value="{{ run.done_count }}" max="{{ run.row_count }}"></progress><br>
+        <strong>Enrichment:</strong> {{ run.enrichment }} <br>
+        <strong>Database:</strong> {{ run.database_name }} <br>
+        <strong>Table:</strong> {{ run.table_name }} <br>
+        <strong>Filter Query:</strong> {{ run.filter_querystring }} <br>
+        <strong>Config:</strong> {{ run.config }} <br>
+        <strong>Started at:</strong> {{ run.started_at }} <br>
+        <strong>Finished at:</strong> {{ run.finished_at }} <br>
+        <strong>Cancel Reason:</strong> {{ run.cancel_reason }} <br>
+        <strong>Next Cursor:</strong> {{ run.next_cursor }} <br>
+        <strong>Row Count:</strong> {{ run.row_count }} <br>
+        <strong>Error Count:</strong> {{ run.error_count }} <br>
+        <strong>Done Count:</strong> {{ run.done_count }} <br>
+        <strong>Actor ID:</strong> {{ run.actor_id }} <br>
+        <strong>Cost (100ths Cent):</strong> {{ run.cost_100ths_cent }}
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
 {% endblock %}

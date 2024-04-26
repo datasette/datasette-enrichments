@@ -133,6 +133,16 @@ async def enrichment_picker(datasette, request):
             }
         )
 
+    previous_runs = []
+    sql = """
+    select * from _enrichment_jobs
+    where database_name = :database and table_name = :table
+    order by started_at desc
+    """
+    db = datasette.get_database(database)
+    for job in (await db.execute(sql, {"database": database, "table": table})).rows:
+        previous_runs.append(dict(job))
+
     return Response.html(
         await datasette.render_template(
             "enrichment_picker.html",
@@ -141,6 +151,7 @@ async def enrichment_picker(datasette, request):
                 "table": table,
                 "filtered_data": filtered_data,
                 "enrichments_and_paths": enrichments_and_paths,
+                "previous_runs": previous_runs,
             },
             request,
         )

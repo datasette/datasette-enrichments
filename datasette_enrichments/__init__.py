@@ -383,3 +383,134 @@ def actor_from_request(datasette, request):
         secret_token, datasette._secret_enrichments_token
     ):
         return {"_datasette_enrichments": True}
+
+
+PROGRESS_JS = """
+const endpoint = 'ENDPOINT';
+const pollInterval = 2000;
+
+let lastPolledTime = Date.now();
+let lastDone = 0;
+let intervalId;
+
+// Function to create and insert progress bar elements
+function setupProgressBar() {
+    // Create elements
+    const progressBarWrapper = document.createElement('div');
+    const progressBar = document.createElement('div');
+    const etaText = document.createElement('p');
+    const etaSpan = document.createElement('span');
+
+    // Set attributes and styles
+    progressBarWrapper.id = 'progressBarWrapper';
+    progressBar.id = 'progressBar';
+    progressBar.style.width = '0%';
+    progressBar.style.height = '20px';
+    progressBar.style.backgroundColor = 'green';
+    etaSpan.id = 'eta';
+    etaText.innerText = 'ETA: ';
+    etaText.appendChild(etaSpan);
+
+    // Append elements
+    progressBarWrapper.appendChild(progressBar);
+    progressBarWrapper.appendChild(etaText);
+
+    // Insert elements into the DOM
+    const table = document.querySelector('table.rows-and-columns');
+    if (table) {
+        table.parentNode.insertBefore(progressBarWrapper, table);
+    } else {
+        console.error('Table not found.');
+    }
+}
+
+function updateProgress() {
+    fetch(endpoint)
+        .then(response => response.json())
+        .then(data => {
+            const row = data.rows[0]
+            const todo = row.row_count;
+            const done = row.done_count;
+            const total = todo + done;
+            const progressPercent = (done / total) * 100;
+
+            // Update progress bar
+            document.getElementById('progressBar').style.width = `${progressPercent}%`;
+
+            // Check if there are remaining tasks
+            const tasksRemaining = total - done;
+            if (tasksRemaining <= 0) {
+                // Stop polling when no tasks remain and update ETA to "Completed"
+                clearInterval(intervalId);
+                document.getElementById('eta').innerText = 'Completed';
+                return;
+            }
+
+            // Calculate ETA
+            const currentTime = Date.now();
+            const timeElapsed = currentTime - lastPolledTime;
+            const tasksCompleted = done - lastDone;
+
+            if (tasksCompleted > 0) {
+                const rate = tasksCompleted / timeElapsed; // tasks per millisecond
+                const timeRemaining = tasksRemaining / rate;
+                const eta = new Date(currentTime + timeRemaining);
+
+                // Update ETA display
+                document.getElementById('eta').innerText = eta.toLocaleTimeString();
+            }
+
+            lastPolledTime = currentTime;
+            lastDone = done;
+        })
+        .catch(error => console.error('Error fetching data:', error));
+}
+
+// Setup progress bar and initiate polling
+setupProgressBar();
+updateProgress();
+intervalId = setInterval(updateProgress, pollInterval);
+""".strip()
+
+
+@hookimpl
+def extra_body_script(request, view_name, table, database, datasette):
+    if view_name != "table":
+        return
+    job_id = request.args.get("_enrichment_job_id")
+    if not job_id:
+        return
+
+    async def inner():
+        # Are there any incomplete jobs for this table?
+        db = datasette.get_database(database)
+        try:
+            jobs = await db.execute(
+                """
+                select id, status, done_count, row_count
+                from _enrichment_jobs
+                where table_name = ?
+            """,
+                (table,),
+            )
+            row = jobs.first()
+            if not row:
+                return
+        except Exception:
+            return
+        if row["done_count"] < row["row_count"]:
+            return PROGRESS_JS.replace(
+                "ENDPOINT",
+                datasette.urls.path(
+                    datasette.urls.table(database, "_enrichment_jobs")
+                    + "?"
+                    + urllib.parse.urlencode(
+                        {
+                            "database_name": database,
+                            "table_name": table,
+                        }
+                    )
+                ),
+            )
+
+    return inner
