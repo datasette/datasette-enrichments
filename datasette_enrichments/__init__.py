@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import asyncio
 from datasette import hookimpl
 from datasette.utils import async_call_with_supported_arguments, tilde_encode
+from datasette_secrets import Secret, get_secret
 import json
 import secrets
 import traceback
@@ -13,7 +14,7 @@ from . import hookspecs
 
 from datasette.utils import await_me_maybe
 
-from typing import TYPE_CHECKING, Any, Tuple, Union, List
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
@@ -65,7 +66,18 @@ create table if not exists _enrichment_errors (
 """.strip()
 
 
+@hookimpl
+def register_secrets():
+    secrets = []
+    for subclass in Enrichment._subclasses:
+        if subclass.secret:
+            secrets.append(subclass.secret)
+    return secrets
+
+
 class Enrichment(ABC):
+    _subclasses = []
+
     batch_size: int = 100
     # Cancel run after this many errors
     default_max_errors: int = 5
@@ -83,7 +95,12 @@ class Enrichment(ABC):
         # The name of this enrichment
         ...
 
-    description = ""  # Short description of this enrichment
+    description: str = ""  # Short description of this enrichment
+    secret: Optional[Secret] = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._subclasses.append(cls)
 
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)

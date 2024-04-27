@@ -217,19 +217,17 @@ To define a secret that your plugin needs, add the following code:
 from datasette_enrichments import Enrichment
 from datasette_secrets import Secret
 
-train_enthusiasts_api_key = Secret(
-    name="TRAIN_ENTHUSIASTS_API_KEY",
-    description="An API key from train-enthusiasts.doesnt.exist",
-    obtain_url="https://train-enthusiasts.doesnt.exist/api-keys",
-    obtain_label="Get an API key"
-)
-
 # Then later in your enrichments class
 class TrainEnthusiastsEnrichment(Enrichment):
     name = "Train Enthusiasts"
     slug = "train-enthusiasts"
     description = "Enrich with extra data from the Train Enthusiasts API"
-    secret = train_enthusiasts_api_key
+    secret = Secret(
+        name="TRAIN_ENTHUSIASTS_API_KEY",
+        description="An API key from train-enthusiasts.doesnt.exist",
+        obtain_url="https://train-enthusiasts.doesnt.exist/api-keys",
+        obtain_label="Get an API key"
+    )
 ```
 Configuring your enrichment like this will result in the following behavior:
 
