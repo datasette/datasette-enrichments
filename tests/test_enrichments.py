@@ -179,3 +179,58 @@ async def test_row_actions(datasette, path, expected_path):
     enrich_page_response = await datasette.client.get(enrich_path, cookies=cookies)
     assert enrich_page_response.status_code == 200
     assert "1 row selected" in enrich_page_response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("env", "user-input"))
+async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
+    if scenario == "env":
+        monkeypatch.setenv("DATASETTE_SECRETS_STRING_SECRET", "env-secret")
+
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response1 = await datasette.client.get("/-/enrich/data/t", cookies=cookies)
+    assert response1.status_code == 200
+    assert (
+        '<a href="/-/enrich/data/t/secretreplace">Replace string with a secret</a>'
+        in response1.text
+    )
+    response2 = await datasette.client.get(
+        "/-/enrich/data/t/secretreplace", cookies=cookies
+    )
+    assert "<h2>Replace string with a secret</h2>" in response2.text
+
+    # name="enrichment_secret" should be present only if not set in env
+    if scenario == "env":
+        assert ' name="enrichment_secret"' not in response2.text
+    else:
+        assert ' name="enrichment_secret"' in response2.text
+
+    # Now try and run it
+    csrftoken = response2.cookies["ds_csrftoken"]
+    cookies["ds_csrftoken"] = csrftoken
+
+    form_data = {"column": "s", "string": "hello", "csrftoken": csrftoken}
+    if scenario == "user-input":
+        form_data["enrichment_secret"] = "user-secret"
+
+    response3 = await datasette.client.post(
+        "/-/enrich/data/t/secretreplace",
+        cookies=cookies,
+        data=form_data,
+    )
+    assert response3.status_code == 302
+    job_id = response3.headers["location"].split("=")[-1]
+
+    # Wait for it to finish and check it worked
+    await wait_for_job(datasette, job_id, "data", timeout=1)
+    # Check for errors
+    job_details = datasette._test_db.execute(
+        "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
+    ).fetchone()
+    assert job_details == (0, 2)
+    # Check rows show enrichment ran correctly
+    rows = datasette._test_db.execute("select s from t order by id").fetchall()
+    if scenario == "env":
+        assert rows == [("env-secret",), ("goodbye",)]
+    else:
+        assert rows == [("user-secret",), ("goodbye",)]

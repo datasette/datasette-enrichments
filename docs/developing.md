@@ -203,6 +203,45 @@ class MyEnrichment(Enrichment):
     log_traceback = True
 ```
 
+## Enrichments that use secrets such as API keys
+
+Enrichments often need to access external APIs, for things like geocoding addresses or accessing Large Language Models. These APIs frequently need some kind of API key.
+
+The enrichments system can work in combination with the [datasette-secrets](https://datasette.io/plugins/datasette-secrets) plugin to manage secret API keys needed for different services.
+
+Examples of enrichments that use this mechanism include [datasette-enrichments-opencage](https://datasette.io/plugins/datasette-enrichments-opencage) and [datasette-enrichments-gpt](https://datasette.io/plugins/datasette-enrichments-gpt).
+
+To define a secret that your plugin needs, add the following code:
+
+```python
+from datasette_enrichments import Enrichment
+from datasette_secrets import Secret
+
+# Then later in your enrichments class
+class TrainEnthusiastsEnrichment(Enrichment):
+    name = "Train Enthusiasts"
+    slug = "train-enthusiasts"
+    description = "Enrich with extra data from the Train Enthusiasts API"
+    secret = Secret(
+        name="TRAIN_ENTHUSIASTS_API_KEY",
+        description="An API key from train-enthusiasts.doesnt.exist",
+        obtain_url="https://train-enthusiasts.doesnt.exist/api-keys",
+        obtain_label="Get an API key"
+    )
+```
+Configuring your enrichment like this will result in the following behavior:
+
+- If a user sets a `DATASETTE_SECRETS_TRAIN_ENTHUSIASTS_API_KEY` environment variable, that value will be used as the API key. You should mention this in your enrichment's documentation.
+- Otherwise, if the user has configured [datasette-secrets](https://datasette.io/plugins/datasette-secrets) to store secrets in the database, admin users with the `manage-secrets` permission will get the option to set that secret as part of the Datasette web UI.
+- If neither of the above are true, any time any user tries to run this enrichment they will be prompted to specify a secret which will be used for that run but will not be stored outside of memory used by the code that runs the enrichment.
+
+With a secret configured in this way, your various class methods such as `initialize()`, `enrich_batch()` and `finalize()` can access the secret value using `await self.get_secret(datasette)` like this:
+
+```python
+api_key = await self.get_secret(datasette, config)
+```
+You must pass both the `datasette` and the `config` arguments that were passed to those methods.
+
 ## Writing tests for enrichments
 
 Take a look at the [test suite for datasette-enrichments-opencage](https://github.com/datasette/datasette-enrichments-opencage/blob/main/tests/test_enrichments_opencage.py) for an example of how to test an enrichment.

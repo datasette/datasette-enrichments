@@ -2,18 +2,22 @@ from abc import ABC, abstractmethod
 import asyncio
 from datasette import hookimpl
 from datasette.utils import async_call_with_supported_arguments, tilde_encode
+from datasette_secrets import Secret, get_secret
 import json
 import secrets
 import traceback
 import urllib
 from datasette.plugins import pm
+from markupsafe import Markup, escape
 from .views import enrichment_picker, enrichment_view
+from wtforms import PasswordField
+from wtforms.validators import DataRequired
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
 from . import hookspecs
 
 from datasette.utils import await_me_maybe
 
-from typing import TYPE_CHECKING, Any, Tuple, Union, List
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
@@ -65,7 +69,22 @@ create table if not exists _enrichment_errors (
 """.strip()
 
 
+@hookimpl
+def register_secrets():
+    secrets = []
+    for subclass in Enrichment._subclasses:
+        if subclass.secret:
+            secrets.append(subclass.secret)
+    return secrets
+
+
+class SecretError(Exception):
+    pass
+
+
 class Enrichment(ABC):
+    _subclasses = []
+
     batch_size: int = 100
     # Cancel run after this many errors
     default_max_errors: int = 5
@@ -83,10 +102,35 @@ class Enrichment(ABC):
         # The name of this enrichment
         ...
 
-    description = ""  # Short description of this enrichment
+    description: str = ""  # Short description of this enrichment
+    secret: Optional[Secret] = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._subclasses.append(cls)
 
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)
+
+    async def get_secret(self, datasette: "Datasette", config: dict):
+        if self.secret is None:
+            breakpoint()
+            raise SecretError("No secret defined for this enrichment")
+        secret = await get_secret(datasette, self.secret.name)
+        if secret is not None:
+            return secret
+        # Try the stashed secrets instead
+        if not hasattr(datasette, "_enrichments_stashed_secrets"):
+            breakpoint()
+            raise SecretError("No secrets have been stashed")
+        stashed_keys = datasette._enrichments_stashed_secrets
+        stash_key = config.get("enrichment_secret")
+        if stash_key not in stashed_keys:
+            breakpoint()
+            raise SecretError(
+                "No secret found in stash for {}".format(self.secret.name)
+            )
+        return stashed_keys[stash_key]
 
     async def log_error(
         self, db: "Database", job_id: int, ids: List[IdType], error: str
@@ -112,6 +156,51 @@ class Enrichment(ABC):
 
     async def get_config_form(self, datasette: "Datasette", db: "Database", table: str):
         return None
+
+    async def _get_config_form(
+        self, datasette: "Datasette", db: "Database", table: str
+    ):
+        # Helper method that adds a `_secret` form field if the enrichment has a secret
+        FormClass = await async_call_with_supported_arguments(
+            self.get_config_form, datasette=datasette, db=db, table=table
+        )
+        if self.secret is None:
+            return FormClass
+        # If secret is already set, return form unmodified
+        if await get_secret(datasette, self.secret.name):
+            return FormClass
+
+        # Otherwise, return form with secret field
+        def stash_api_key(form, field):
+            if not hasattr(datasette, "_enrichments_stashed_secrets"):
+                datasette._enrichments_stashed_secrets = {}
+            key = secrets.token_urlsafe(16)
+            datasette._enrichments_stashed_secrets[key] = field.data
+            field.data = key
+
+        formatted_description = self.secret.description
+        if self.secret.obtain_url and self.secret.obtain_label:
+            html_bits = []
+            if self.secret.description:
+                html_bits.append(escape(self.secret.description))
+                html_bits.append(" - ")
+            html_bits.append(
+                f'<a href="{self.secret.obtain_url}" target="_blank">{self.secret.obtain_label}</a>'
+            )
+            formatted_description = Markup("".join(html_bits))
+
+        class FormWithSecret(FormClass):
+            enrichment_secret = PasswordField(
+                self.secret.name,
+                description=formatted_description,
+                validators=[
+                    DataRequired(message="Secret is required."),
+                    stash_api_key,
+                ],
+                render_kw={"autocomplete": "off"},
+            )
+
+        return FormWithSecret
 
     async def initialize(
         self, datasette: "Datasette", db: "Database", table: str, config: dict
