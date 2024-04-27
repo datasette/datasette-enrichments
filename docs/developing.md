@@ -214,7 +214,6 @@ Examples of enrichments that use this mechanism include [datasette-enrichments-o
 To define a secret that your plugin needs, add the following code:
 
 ```python
-from datasette import hookimpl
 from datasette_enrichments import Enrichment
 from datasette_secrets import Secret
 
@@ -224,10 +223,6 @@ train_enthusiasts_api_key = Secret(
     obtain_url="https://train-enthusiasts.doesnt.exist/api-keys",
     obtain_label="Get an API key"
 )
-
-@hookimpl
-def register_secrets():
-    return [train_enthusiasts_api_key]
 
 # Then later in your enrichments class
 class TrainEnthusiastsEnrichment(Enrichment):
