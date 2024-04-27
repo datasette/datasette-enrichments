@@ -1,7 +1,7 @@
 import asyncio
 from datasette.database import Database
 from typing import List
-from wtforms import Form, SelectField
+from wtforms import Form, SelectField, StringField
 from wtforms.widgets import ListWidget, CheckboxInput
 import pytest
 from datasette.plugins import pm
@@ -16,6 +16,7 @@ class MultiCheckboxField(SelectField):
 @pytest.fixture(autouse=True)
 def load_uppercase_plugin():
     from datasette_enrichments import Enrichment
+    from datasette_secrets import Secret
 
     class UppercaseDemo(Enrichment):
         name = "Convert to uppercase"
@@ -60,15 +61,55 @@ def load_uppercase_plugin():
             # Wait 0.3s
             await asyncio.sleep(0.3)
 
-    class UppercasePlugin:
-        __name__ = "UppercasePlugin"
+    class SecretReplacePlugin(Enrichment):
+        name = "Replace string with a secret"
+        slug = "secretreplace"
+        description = "Replace a string with a secret"
+        secret = Secret(
+            name="STRING_SECRET",
+            description="The secret to use in the replacement",
+        )
+
+        async def get_config_form(self, db, table):
+            choices = [(col, col) for col in await db.table_columns(table)]
+
+            class ConfigForm(Form):
+                column = SelectField("Column", choices=choices)
+                string = StringField("String to be replaced")
+
+            return ConfigForm
+
+        async def enrich_batch(
+            self,
+            datasette,
+            db: Database,
+            table: str,
+            rows: List[dict],
+            pks: List[str],
+            config: dict,
+            job_id: int,
+        ):
+            secret = await self.get_secret(datasette, config)
+            for row in rows:
+                await db.execute_write(
+                    "update [{}] set [{}] = ? where {}".format(
+                        table,
+                        config["column"],
+                        " and ".join('"{}" = ?'.format(pk) for pk in pks),
+                    ),
+                    [row[config["column"]].replace(config["string"], secret)]
+                    + [row[pk] for pk in pks],
+                )
+
+    class EnrichmentsDemoPlugin:
+        __name__ = "EnrichmentsDemoPlugin"
 
         @hookimpl
         def register_enrichments(self):
-            return [UppercaseDemo()]
+            return [UppercaseDemo(), SecretReplacePlugin()]
 
-    pm.register(UppercasePlugin(), name="undo_uppercase")
+    pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")
     try:
         yield
     finally:
-        pm.unregister(name="undo_uppercase")
+        pm.unregister(name="undo_EnrichmentsDemoPlugin")
