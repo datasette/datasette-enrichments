@@ -9,6 +9,8 @@ import traceback
 import urllib
 from datasette.plugins import pm
 from .views import enrichment_picker, enrichment_view
+from wtforms import PasswordField
+from wtforms.validators import DataRequired
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
 from . import hookspecs
 
@@ -129,6 +131,38 @@ class Enrichment(ABC):
 
     async def get_config_form(self, datasette: "Datasette", db: "Database", table: str):
         return None
+
+    async def _get_config_form(
+        self, datasette: "Datasette", db: "Database", table: str
+    ):
+        # Helper method that adds a `_secret` form field if the enrichment has a secret
+        FormClass = await self.get_config_form(datasette, db, table)
+        if self.secret is None:
+            return FormClass
+        # If secret is already set, return form unmodified
+        if await get_secret(datasette, self.secret.name):
+            return FormClass
+
+        # Otherwise, return form with secret field
+        def stash_api_key(form, field):
+            if not hasattr(datasette, "_enrichments_gpt_stashed_keys"):
+                datasette._enrichments_gpt_stashed_keys = {}
+            key = secrets.token_urlsafe(16)
+            datasette._enrichments_gpt_stashed_keys[key] = field.data
+            field.data = key
+
+        class FormWithSecret(FormClass):
+            enrichment_secret = PasswordField(
+                self.secret.name,
+                description=self.secret.description,
+                validators=[
+                    DataRequired(message="Secret is required."),
+                    stash_api_key,
+                ],
+                render_kw={"autocomplete": "off"},
+            )
+
+        return FormWithSecret
 
     async def initialize(
         self, datasette: "Datasette", db: "Database", table: str, config: dict

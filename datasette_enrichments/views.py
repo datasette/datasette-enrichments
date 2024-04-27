@@ -65,7 +65,7 @@ async def enrichment_view(datasette, request):
 
     form = (
         await async_call_with_supported_arguments(
-            enrichment.get_config_form,
+            enrichment._get_config_form,
             datasette=datasette,
             db=datasette.get_database(database),
             table=table,
@@ -170,7 +170,7 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     post_vars = MultiParams(urllib.parse.parse_qs(body.decode("utf-8")))
 
     Form = await async_call_with_supported_arguments(
-        enrichment.get_config_form, datasette=datasette, db=db, table=table
+        enrichment._get_config_form, datasette=datasette, db=db, table=table
     )
 
     form = Form(post_vars)
