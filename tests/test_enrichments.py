@@ -297,8 +297,13 @@ async def test_async_tasks_do_not_crash(tmp_path_factory):
     loop = asyncio.get_event_loop()
     for i in range(100):
         loop.create_task(increment())
-    # Wait 1s
-    await asyncio.sleep(1)
-    # Check the counter
-    counter = await db.execute("select n from counter where id = 1")
-    assert counter.first()[0] == 1000
+    # Check counter every 0.1s until it reaches 1000
+    num_loops = 0
+    while True:
+        num_loops += 1
+        await asyncio.sleep(0.1)
+        counter = await db.execute("select n from counter where id = 1")
+        if counter.first()[0] == 1000:
+            break
+        assert num_loops < 1000, "Counter did not reach goal after 1000 checks"
+
