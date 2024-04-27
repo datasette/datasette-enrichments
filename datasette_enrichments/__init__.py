@@ -114,19 +114,16 @@ class Enrichment(ABC):
 
     async def get_secret(self, datasette: "Datasette", config: dict):
         if self.secret is None:
-            breakpoint()
             raise SecretError("No secret defined for this enrichment")
         secret = await get_secret(datasette, self.secret.name)
         if secret is not None:
             return secret
         # Try the stashed secrets instead
         if not hasattr(datasette, "_enrichments_stashed_secrets"):
-            breakpoint()
             raise SecretError("No secrets have been stashed")
         stashed_keys = datasette._enrichments_stashed_secrets
         stash_key = config.get("enrichment_secret")
         if stash_key not in stashed_keys:
-            breakpoint()
             raise SecretError(
                 "No secret found in stash for {}".format(self.secret.name)
             )
