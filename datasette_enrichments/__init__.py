@@ -78,6 +78,10 @@ def register_secrets():
     return secrets
 
 
+class SecretError(Exception):
+    pass
+
+
 class Enrichment(ABC):
     _subclasses = []
 
@@ -108,6 +112,26 @@ class Enrichment(ABC):
     def __repr__(self):
         return "<Enrichment: {}>".format(self.slug)
 
+    async def get_secret(self, datasette: "Datasette", config: dict):
+        if self.secret is None:
+            breakpoint()
+            raise SecretError("No secret defined for this enrichment")
+        secret = await get_secret(datasette, self.secret.name)
+        if secret is not None:
+            return secret
+        # Try the stashed secrets instead
+        if not hasattr(datasette, "_enrichments_stashed_secrets"):
+            breakpoint()
+            raise SecretError("No secrets have been stashed")
+        stashed_keys = datasette._enrichments_stashed_secrets
+        stash_key = config.get("enrichment_secret")
+        if stash_key not in stashed_keys:
+            breakpoint()
+            raise SecretError(
+                "No secret found in stash for {}".format(self.secret.name)
+            )
+        return stashed_keys[stash_key]
+
     async def log_error(
         self, db: "Database", job_id: int, ids: List[IdType], error: str
     ):
@@ -137,7 +161,9 @@ class Enrichment(ABC):
         self, datasette: "Datasette", db: "Database", table: str
     ):
         # Helper method that adds a `_secret` form field if the enrichment has a secret
-        FormClass = await self.get_config_form(datasette, db, table)
+        FormClass = await async_call_with_supported_arguments(
+            self.get_config_form, datasette=datasette, db=db, table=table
+        )
         if self.secret is None:
             return FormClass
         # If secret is already set, return form unmodified
@@ -146,10 +172,10 @@ class Enrichment(ABC):
 
         # Otherwise, return form with secret field
         def stash_api_key(form, field):
-            if not hasattr(datasette, "_enrichments_gpt_stashed_keys"):
-                datasette._enrichments_gpt_stashed_keys = {}
+            if not hasattr(datasette, "_enrichments_stashed_secrets"):
+                datasette._enrichments_stashed_secrets = {}
             key = secrets.token_urlsafe(16)
-            datasette._enrichments_gpt_stashed_keys[key] = field.data
+            datasette._enrichments_stashed_secrets[key] = field.data
             field.data = key
 
         formatted_description = self.secret.description

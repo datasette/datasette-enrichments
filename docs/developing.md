@@ -233,7 +233,14 @@ Configuring your enrichment like this will result in the following behavior:
 
 - If a user sets a `DATASETTE_SECRETS_TRAIN_ENTHUSIASTS_API_KEY` environment variable, that value will be used as the API key. You should mention this in your enrichment's documentation.
 - Otherwise, if the user has configured [datasette-secrets](https://datasette.io/plugins/datasette-secrets) to store secrets in the database, admin users with the `manage-secrets` permission will get the option to set that secret as part of the Datasette web UI.
-- If neither of the above are true, any time any user tries to run this enrichment they will be prompted to specify a secret which will be used for that run but will not be stored anywhere.
+- If neither of the above are true, any time any user tries to run this enrichment they will be prompted to specify a secret which will be used for that run but will not be stored outside of memory used by the code that runs the enrichment.
+
+With a secret configured in this way, your various class methods such as `initialize()`, `enrich_batch()` and `finalize()` can access the secret value using `await self.get_secret(datasette)` like this:
+
+```python
+api_key = await self.get_secret(datasette, config)
+```
+You must pass both the `datasette` and the `config` arguments that were passed to those methods.
 
 ## Writing tests for enrichments
 
