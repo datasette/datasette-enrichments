@@ -8,6 +8,7 @@ import secrets
 import traceback
 import urllib
 from datasette.plugins import pm
+from markupsafe import Markup, escape
 from .views import enrichment_picker, enrichment_view
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
@@ -151,10 +152,21 @@ class Enrichment(ABC):
             datasette._enrichments_gpt_stashed_keys[key] = field.data
             field.data = key
 
+        formatted_description = self.secret.description
+        if self.secret.obtain_url and self.secret.obtain_label:
+            html_bits = []
+            if self.secret.description:
+                html_bits.append(escape(self.secret.description))
+                html_bits.append(" - ")
+            html_bits.append(
+                f'<a href="{self.secret.obtain_url}" target="_blank">{self.secret.obtain_label}</a>'
+            )
+            formatted_description = Markup("".join(html_bits))
+
         class FormWithSecret(FormClass):
             enrichment_secret = PasswordField(
                 self.secret.name,
-                description=self.secret.description,
+                description=formatted_description,
                 validators=[
                     DataRequired(message="Secret is required."),
                     stash_api_key,
