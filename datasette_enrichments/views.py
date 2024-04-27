@@ -63,14 +63,16 @@ async def enrichment_view(datasette, request):
     if request.method == "POST":
         return await enrich_data_post(datasette, request, enrichment, filtered_data)
 
-    form = (
-        await async_call_with_supported_arguments(
-            enrichment._get_config_form,
-            datasette=datasette,
-            db=datasette.get_database(database),
-            table=table,
-        )
-    )()
+    form_class = await async_call_with_supported_arguments(
+        enrichment._get_config_form,
+        datasette=datasette,
+        db=datasette.get_database(database),
+        table=table,
+    )
+    if form_class:
+        form = form_class()
+    else:
+        form = None
 
     return Response.html(
         await datasette.render_template(
@@ -169,13 +171,15 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     body = await request.post_body()
     post_vars = MultiParams(urllib.parse.parse_qs(body.decode("utf-8")))
 
-    Form = await async_call_with_supported_arguments(
+    form_class = await async_call_with_supported_arguments(
         enrichment._get_config_form, datasette=datasette, db=db, table=table
     )
+    if form_class:
+        form = form_class(post_vars)
+    else:
+        form = None
 
-    form = Form(post_vars)
-
-    if not form.validate():
+    if form and not form.validate():
         return Response.html(
             await datasette.render_template(
                 ["enrichment-{}.html".format(enrichment.slug), "enrichment.html"],
@@ -190,7 +194,9 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
             )
         )
 
-    config = {field.name: field.data for field in form}
+    config = {}
+    if form:
+        config = {field.name: field.data for field in form}
 
     # Call initialize method, which can create tables etc
     await async_call_with_supported_arguments(

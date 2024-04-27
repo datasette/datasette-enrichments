@@ -234,3 +234,47 @@ async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
         assert rows == [("env-secret",), ("goodbye",)]
     else:
         assert rows == [("user-secret",), ("goodbye",)]
+
+
+@pytest.mark.asyncio
+async def test_enrichment_with_no_config_form(datasette):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response1 = await datasette.client.get("/-/enrich/data/t", cookies=cookies)
+    assert response1.status_code == 200
+    assert (
+        '<a href="/-/enrich/data/t/hashrows">Calculate a hash for each row</a>'
+        in response1.text
+    )
+    response2 = await datasette.client.get("/-/enrich/data/t/hashrows", cookies=cookies)
+    assert "<h2>Calculate a hash for each row</h2>" in response2.text
+
+    # Now try and run it
+    csrftoken = response2.cookies["ds_csrftoken"]
+    cookies["ds_csrftoken"] = csrftoken
+
+    form_data = {"csrftoken": csrftoken}
+
+    response3 = await datasette.client.post(
+        "/-/enrich/data/t/hashrows",
+        cookies=cookies,
+        data=form_data,
+    )
+    assert response3.status_code == 302
+    job_id = response3.headers["location"].split("=")[-1]
+
+    # Wait for it to finish and check it worked
+    await wait_for_job(datasette, job_id, "data", timeout=1)
+
+    # Check for errors
+    errors = datasette._test_db.execute(
+        "select job_id, row_pks, error from _enrichment_errors"
+    ).fetchall()
+    job_details = datasette._test_db.execute(
+        "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
+    ).fetchone()
+    assert job_details == (0, 2)
+    # Check rows show enrichment ran correctly
+    rows = datasette._test_db.execute("select sha_256 from t order by id").fetchall()
+    # Should be two 64 leng strings
+    assert len(rows[0][0]) == 64
+    assert len(rows[1][0]) == 64

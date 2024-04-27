@@ -1,5 +1,7 @@
 import asyncio
 from datasette.database import Database
+import hashlib
+import json
 from typing import List
 from wtforms import Form, SelectField, StringField
 from wtforms.widgets import ListWidget, CheckboxInput
@@ -101,12 +103,40 @@ def load_uppercase_plugin():
                     + [row[pk] for pk in pks],
                 )
 
+    class HashRows(Enrichment):
+        name = "Calculate a hash for each row"
+        slug = "hashrows"
+        description = "To demonstrate an enrichment with no config form"
+
+        async def initialize(self, datasette, db, table, config):
+            await db.execute_write(
+                "alter table [{}] add column sha_256 text".format(table)
+            )
+
+        async def enrich_batch(
+            self,
+            db: Database,
+            table: str,
+            rows: List[dict],
+            pks: List[str],
+        ):
+            for row in rows:
+                to_hash = json.dumps(row, default=repr)
+                sha_256 = hashlib.sha256(to_hash.encode()).hexdigest()
+                await db.execute_write(
+                    "update [{}] set sha_256 = ? where {}".format(
+                        table,
+                        " and ".join('"{}" = ?'.format(pk) for pk in pks),
+                    ),
+                    [sha_256] + [row[pk] for pk in pks],
+                )
+
     class EnrichmentsDemoPlugin:
         __name__ = "EnrichmentsDemoPlugin"
 
         @hookimpl
         def register_enrichments(self):
-            return [UppercaseDemo(), SecretReplacePlugin()]
+            return [UppercaseDemo(), SecretReplacePlugin(), HashRows()]
 
     pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")
     try:
