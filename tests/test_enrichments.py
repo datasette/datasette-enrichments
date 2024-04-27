@@ -278,3 +278,27 @@ async def test_enrichment_with_no_config_form(datasette):
     # Should be two 64 leng strings
     assert len(rows[0][0]) == 64
     assert len(rows[1][0]) == 64
+
+
+@pytest.mark.asyncio
+async def test_async_tasks_do_not_crash(tmp_path_factory):
+    tmpdir = tmp_path_factory.mktemp("test_async_tasks_do_not_crash")
+    db_path = str(tmpdir / "test.db")
+    ds = Datasette([db_path])
+    db = ds.get_database("test")
+    await db.execute_write("create table counter (id integer primary key, n integer)")
+    await db.execute_write("insert into counter (n) values (0)")
+
+    # We are going to spin off a bunch of tasks that all write to the counter
+    async def increment():
+        for i in range(10):
+            await db.execute_write("update counter set n = n + 1 where id = 1")
+
+    loop = asyncio.get_event_loop()
+    for i in range(100):
+        loop.create_task(increment())
+    # Wait 1s
+    await asyncio.sleep(1)
+    # Check the counter
+    counter = await db.execute("select n from counter where id = 1")
+    assert counter.first()[0] == 1000
