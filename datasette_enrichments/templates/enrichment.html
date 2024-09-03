@@ -56,7 +56,7 @@
 
 {% block above_form %}{% endblock %}
 
-<form action="{{ request.full_path }}" method="POST">
+<form class="core" action="{{ request.full_path }}" method="POST">
   {% if enrichment_form %}
     <div class="config-form">
       {% for field in enrichment_form %}
