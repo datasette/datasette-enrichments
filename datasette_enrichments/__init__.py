@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import asyncio
 from datasette import hookimpl
-from datasette.utils import async_call_with_supported_arguments, tilde_encode
+from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
 from datasette_secrets import Secret, get_secret
 import json
 import secrets
@@ -9,7 +9,7 @@ import traceback
 import urllib
 from datasette.plugins import pm
 from markupsafe import Markup, escape
-from .views import enrichment_picker, enrichment_view
+from .views import enrichment_picker, enrichment_view, job_view, list_jobs_view
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
@@ -381,6 +381,8 @@ class Enrichment(ABC):
 @hookimpl
 def register_routes():
     return [
+        (r"^/-/enrich/(?P<database>[^/]+)/-/jobs$", list_jobs_view),
+        (r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)$", job_view),
         (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", enrichment_picker),
         (
             r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)/(?P<enrichment>[^/]+)$",
@@ -410,6 +412,37 @@ def table_actions(datasette, actor, database, table, request):
                     ),
                     "label": "Enrich selected data",
                     "description": "Run a data cleaning operation against every selected row",
+                }
+            ]
+
+    return inner
+
+
+@hookimpl
+def database_actions(datasette, actor, database):
+    async def inner():
+        if await datasette.permission_allowed(
+            actor, "enrichments", resource=database, default=False
+        ):
+            # Are there any runs?
+            try:
+                job_count = (
+                    await datasette.get_database(database).execute(
+                        "select count(*) from _enrichment_jobs where database_name = ?",
+                        (database,),
+                    )
+                ).single_value()
+                if not job_count:
+                    return
+            except sqlite3.OperationalError:  # No such table
+                return
+            return [
+                {
+                    "href": datasette.urls.path(
+                        "/-/enrich/{}/-/jobs".format(database),
+                    ),
+                    "label": "Enrichment jobs",
+                    "description": "View and manage enrichment jobs for this database",
                 }
             ]
 

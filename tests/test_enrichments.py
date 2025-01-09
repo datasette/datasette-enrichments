@@ -182,6 +182,21 @@ async def test_row_actions(datasette, path, expected_path):
 
 
 @pytest.mark.asyncio
+async def test_job_listings(datasette):
+    "Test /-/enrich/data/-/jobs and /-/enrich/data/-/jobs/18 and database action button"
+    # /-/enrich/data/-/jobs requires auth
+    response = await datasette.client.get("/-/enrich/data/-/jobs")
+    assert response.status_code == 403
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response2 = await datasette.client.get("/-/enrich/data/-/jobs", cookies=cookies)
+    # The table doesn't exist yet, but this should still return 200
+    assert response2.status_code == 200
+    assert (
+        "No enrichment jobs have been run against this database yet" in response2.text
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ("env", "user-input"))
 async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
     if scenario == "env":

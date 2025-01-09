@@ -4,8 +4,8 @@ from datasette.utils import (
     path_with_removed_args,
     MultiParams,
     tilde_decode,
-    tilde_encode,
 )
+import json
 from .utils import get_with_auth
 import urllib.parse
 
@@ -15,6 +15,73 @@ async def check_permissions(datasette, request, database):
         request.actor, "enrichments", resource=database, default=False
     ):
         raise Forbidden("Permission denied for enrichments")
+
+
+async def job_view(datasette, request):
+    "Page showing details of an enrichment job"
+    from . import get_enrichments
+
+    job_id = request.url_vars["job_id"]
+    database = request.url_vars["database"]
+    await check_permissions(datasette, request, database)
+
+    db = datasette.get_database(database)
+    job = (
+        await db.execute(
+            "select * from _enrichment_jobs where id = ? and database_name = ?",
+            (job_id, database),
+        )
+    ).first()
+    if not job:
+        raise NotFound("Job not found")
+
+    enrichments = await get_enrichments(datasette)
+    enrichment = enrichments.get(
+        job["enrichment"]
+    )  # May be None if plugin not installed
+
+    job = dict(job)
+    config = json.loads(job["config"])
+    return Response.html(
+        await datasette.render_template(
+            "enrichment_job.html",
+            {
+                "database": database,
+                "job": job,
+                "config": config,
+                "enrichment": enrichment,
+            },
+            request,
+        )
+    )
+
+
+async def list_jobs_view(datasette, request):
+    database = request.url_vars["database"]
+    await check_permissions(datasette, request, database)
+    db = datasette.get_database(database)
+    if await db.table_exists("_enrichment_jobs"):
+        jobs = [
+            dict(row)
+            for row in (
+                await db.execute(
+                    "select * from _enrichment_jobs where database_name = ? order by id desc",
+                    (database,),
+                )
+            ).rows
+        ]
+    else:
+        jobs = []
+    return Response.html(
+        await datasette.render_template(
+            "enrichment_jobs.html",
+            {
+                "database": database,
+                "jobs": jobs,
+            },
+            request,
+        )
+    )
 
 
 async def enrichment_view(datasette, request):
@@ -162,7 +229,7 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     # Enqueue the enrichment to be run
     filters = []
     for key in request.args:
-        if key not in ("_enrichment", "_sort"):
+        if key not in ("_enrichment", "_sort", "_enrichment_job"):
             for value in request.args.getlist(key):
                 filters.append((key, value))
     filter_querystring = urllib.parse.urlencode(filters)

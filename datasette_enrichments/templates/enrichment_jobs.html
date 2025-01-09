@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block crumbs %}
+{{ crumbs.nav(request=request, database=database, table=table) }}
+{% endblock %}
+
+{% block title %}Enrichment jobs run against {{ database }}{% endblock %}
+
+{% block extra_head %}
+<style type="text/css">
+.enrichments th, .enrichments td {
+  padding: 0.2em;
+}
+.enrichments th {
+  font-weight: bold;
+}
+</style>  
+{% endblock %}
+
+{% block content %}
+
+<h1>Enrichment jobs run against {{ database }}</h1>
+
+{% if not jobs %}
+  <p>No enrichment jobs have been run against this database yet.</p>
+{% else %}
+  <div style="box-sizing: border-box; width: 100%; overflow: auto;">
+  <table class="enrichments">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Status</th>
+        <th>Enrichment</th>
+        <th>Table</th>
+        <th>Filter</th>
+        <th>Started at</th>
+        <th>Finished at</th>
+        <th>Cancel reason</th>
+        <th>Next cursor</th>
+        <th>Row count</th>
+        <th>Error count</th>
+        <th>Done count</th>
+        <th>Actor id</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td><a href="jobs/{{ job.id }}">{{ job.id }}</a></td>
+        <td>{{ job.status }}</td>
+        <td>{{ job.enrichment }}</td>
+        <td><a href="{{ urls.table(job.database_name, job.table_name )}}">{{ job.table_name }}</a>
+        <td><a href="{{ urls.table(job.database_name, job.table_name )}}?{{ job.filter_querystring }}">{{ job.filter_querystring }}</a></td>
+        <td>{{ job.started_at }}</td>
+        <td>{{ job.finished_at or "" }}</td>
+        <td>{{ job.cancel_reason or "-" }}</td>
+        <td>{{ job.next_cursor or "" }}</td>
+        <td>{{ job.row_count }}</td>
+        <td>{{ job.error_count }}</td>
+        <td>{{ job.done_count }}</td>
+        <td>{{ job.actor_id }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+{% endif %}
+
+{% endblock %}

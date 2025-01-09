@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block crumbs %}
+<p class="crumbs">
+  <a href="{{ urls.instance() }}">home</a>
+    /
+  <a href="{{ urls.database(job.database_name) }}">{{ job.database_name }}</a>
+    /
+  <a href="{{ urls.path("/-/enrich/" + job.database_name + "/-/jobs") }}">enrichment jobs</a>
+</p>
+{% endblock %}
+
+{% block title %}Enrichment run against {{ job.database_name }}/{{ job.table_name }} (ID={{ job.id }}){% endblock %}
+
+{% block extra_head %}
+<style type="text/css">
+.enrichments dt {
+  font-weight: bold;
+}
+.enrichments dd {
+  text-indent: 1em;
+}
+</style>  
+{% endblock %}
+
+{% block content %}
+
+<h1>Enrichment run against <a href="{{ urls.table(job.database_name, job.table_name )}}">{{ job.database_name }}/{{ job.table_name }}</a> (ID={{ job.id }})</h1>
+
+{% if enrichment %}
+  <p>Ran <strong>{{ enrichment.name }}</strong> at {{ job.started_at }}, status is <strong>{{ job.status }}</strong>.</p>
+{% endif %}
+
+<style>
+dt {
+  font-weight: bold;
+}
+dd {
+  text-indent: 1em;
+}
+dd dl {
+  margin-left: 1em;
+}
+</style>
+
+<dl>
+  <dt>id</dt>
+  <dd>{{ job.id }}</dd>
+  <dt>status</dt>
+  <dd>{{ job.status }}</dd>
+  <dt>enrichment</dt>
+  <dd>{{ job.enrichment }}</dd>
+  <dt>database_name</dt>
+  <dd>{{ job.database_name }}</dd>
+  <dt>table_name</dt>
+  <dd>{{ job.table_name }}</dd>
+  <dt>filter_querystring</dt>
+  <dd><a href="{{ urls.table(job.database_name, job.table_name )}}?{{ job.filter_querystring }}">{{ job.filter_querystring }}</a></dd>
+  <dt>config</dt>
+  <dd>
+    <ul>
+      {% for key, value in config.items() %}
+        <li><strong>{{ key }}</strong>: {{ value }}</li>
+      {% endfor %}
+    </ul>
+    </dl>
+  </dd>
+  <dt>started_at</dt>
+  <dd>{{ job.started_at }}</dd>
+  <dt>finished_at</dt>
+  <dd>{{ job.finished_at }}</dd>
+  <dt>cancel_reason</dt>
+  <dd>{{ job.cancel_reason }}</dd>
+  <dt>next_cursor</dt>
+  <dd>{{ job.next_cursor }}</dd>
+  <dt>row_count</dt>
+  <dd>{{ job.row_count }}</dd>
+  <dt>error_count</dt>
+  <dd>{{ job.error_count }}</dd>
+  <dt>done_count</dt>
+  <dd>{{ job.done_count }}</dd>
+  <dt>actor_id</dt>
+  <dd>{{ job.actor_id }}</dd>
+</dl>
+
+{% endblock %}
