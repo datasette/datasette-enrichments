@@ -4,7 +4,7 @@
 {{ crumbs.nav(request=request, database=database, table=table) }}
 {% endblock %}
 
-{% block title %}Enrichment jobs run against {{ database }}{% endblock %}
+{% block title %}Enrichments run against {{ database }}{% if table %}/{{ table }}{% endif %}{% endblock %}
 
 {% block extra_head %}
 <style type="text/css">
@@ -19,10 +19,10 @@
 
 {% block content %}
 
-<h1>Enrichment jobs run against {{ database }}</h1>
+<h1>Enrichments run against <a href="{{ urls.database(database) }}">{{ database }}</a>{% if table %}/<a href="{{ urls.table(database, table) }}">{{ table }}</a>{% endif %}</h1>
 
 {% if not jobs %}
-  <p>No enrichment jobs have been run against this database yet.</p>
+  <p>No enrichment jobs have been run against this {% if table %}table{% else %}database{% endif %} yet.</p>
 {% else %}
   <div style="box-sizing: border-box; width: 100%; overflow: auto;">
   <table class="enrichments">

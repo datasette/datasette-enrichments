@@ -60,16 +60,17 @@ async def list_jobs_view(datasette, request):
     database = request.url_vars["database"]
     await check_permissions(datasette, request, database)
     db = datasette.get_database(database)
+    where = ["database_name = :database_name"]
+    params = {"database_name": database}
+    table = request.args.get("table")
+    if table:
+        where.append("table_name = :table_name")
+        params["table_name"] = table
+    sql = "select * from _enrichment_jobs where {where} order by id desc".format(
+        where=" and ".join(where)
+    )
     if await db.table_exists("_enrichment_jobs"):
-        jobs = [
-            dict(row)
-            for row in (
-                await db.execute(
-                    "select * from _enrichment_jobs where database_name = ? order by id desc",
-                    (database,),
-                )
-            ).rows
-        ]
+        jobs = [dict(row) for row in (await db.execute(sql, params)).rows]
     else:
         jobs = []
     return Response.html(
@@ -77,6 +78,7 @@ async def list_jobs_view(datasette, request):
             "enrichment_jobs.html",
             {
                 "database": database,
+                "table": table,
                 "jobs": jobs,
             },
             request,
