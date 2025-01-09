@@ -28,7 +28,11 @@
 <h1>Enrichment run against <a href="{{ urls.table(job.database_name, job.table_name )}}">{{ job.database_name }}/{{ job.table_name }}</a> (ID={{ job.id }})</h1>
 
 {% if enrichment %}
-  <p>Ran <strong>{{ enrichment.name }}</strong> at {{ job.started_at }}, status is <strong>{{ job.status }}</strong>.</p>
+  <p>Ran <strong>{{ enrichment.name }}</strong> at {{ job.started_at }}, status is <strong>{{ job.status }}</strong>.
+  {% if job.error_count %}
+    <a href="{{ urls.table(job.database_name, "_enrichment_errors") }}?_sort_desc=id&amp;job_id={{ job.id }}">{{ job.error_count }} error{{ job.error_count == 1 and "" or "s" }}</a>
+  {% endif %}
+  </p>
 {% endif %}
 
 <style>
@@ -76,7 +80,7 @@ dd dl {
   <dt>row_count</dt>
   <dd>{{ job.row_count }}</dd>
   <dt>error_count</dt>
-  <dd>{{ job.error_count }}</dd>
+  <dd>{% if job.error_count %}<a href="{{ urls.table(job.database_name, "_enrichment_errors") }}?_sort_desc=id&amp;job_id={{ job.id }}">{{ job.error_count }}</a>{% else %}0{% endif %}</dd>
   <dt>done_count</dt>
   <dd>{{ job.done_count }}</dd>
   <dt>actor_id</dt>
