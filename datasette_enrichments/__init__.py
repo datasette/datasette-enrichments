@@ -13,6 +13,7 @@ from .views import enrichment_picker, enrichment_view, job_view, list_jobs_view
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
+from urllib.parse import quote
 from . import hookspecs
 
 from datasette.utils import await_me_maybe
@@ -397,7 +398,7 @@ def table_actions(datasette, actor, database, table, request):
         if await datasette.permission_allowed(
             actor, "enrichments", resource=database, default=False
         ):
-            return [
+            items = [
                 {
                     "href": datasette.urls.path(
                         "/-/enrich/{}/{}{}".format(
@@ -414,6 +415,32 @@ def table_actions(datasette, actor, database, table, request):
                     "description": "Run a data cleaning operation against every selected row",
                 }
             ]
+            # Are there any runs?
+            try:
+                job_count = (
+                    await datasette.get_database(database).execute(
+                        "select count(*) from _enrichment_jobs where database_name = ? and table_name = ?",
+                        (database, table),
+                    )
+                ).single_value()
+                if job_count:
+                    items.append(
+                        {
+                            "href": datasette.urls.path(
+                                "/-/enrich/{}/-/jobs?table={}".format(
+                                    database, quote(table)
+                                ),
+                            ),
+                            "label": "Enrichment jobs",
+                            "description": "View and manage {} enrichment job{} for this table".format(
+                                job_count, "s" if job_count != 1 else ""
+                            ),
+                        }
+                    )
+            except sqlite3.OperationalError:  # No such table
+                pass
+
+            return items
 
     return inner
 
@@ -442,7 +469,9 @@ def database_actions(datasette, actor, database):
                         "/-/enrich/{}/-/jobs".format(database),
                     ),
                     "label": "Enrichment jobs",
-                    "description": "View and manage enrichment jobs for this database",
+                    "description": "View and manage {} enrichment job{} for this database".format(
+                        job_count, "s" if job_count != 1 else ""
+                    ),
                 }
             ]
 
