@@ -253,7 +253,7 @@ class Enrichment(ABC):
         pks: list,
         config: dict,
         job_id: int,
-    ):
+    ) -> Optional[int]:
         raise NotImplementedError
 
     async def increment_cost(
