@@ -93,7 +93,7 @@ async def enrich_batch(
     pks: List[str],
     config: dict,
     job_id: int,
-):
+) -> Optional[int]:
     # Enrichment logic goes here
 ```
 Again, you can use just the subset of the named parameters that you need.
@@ -113,6 +113,10 @@ The parameters available to `enrich_batch()` are as follows:
 - `pks` is a list of primary key column names for the table.
 - `config` is a dictionary of configuration options that the user set for the enrichment, using the configuration form (if one was provided).
 - `job_id` is a unique integer ID for the current job. This can be used to log additional information about the enrichment execution.
+
+Your method can optionally return an integer count of the number of rows that were successfully processed. You should do this if you are using the `.log_error()` method described below to track errors - that way the progress bar will be updated with the correct number of rows processed.
+
+If you do not return a count, the system will assume that a call to `enrich_batch()` which did not raise an exception processed all of the rows that were passed to it.
 
 ### get_config_form()
 
