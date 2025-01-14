@@ -48,7 +48,7 @@ async def get_enrichments(datasette):
 CREATE_JOB_TABLE_SQL = """
 create table if not exists _enrichment_jobs (
     id integer primary key,
-    status text, -- pending, running, cancelled, finished
+    status text, -- pending, running, cancelled, finished, paused
     enrichment text, -- slug of enrichment
     database_name text,
     table_name text,
@@ -90,6 +90,96 @@ async def ensure_tables(db):
     await db.execute_write(CREATE_JOB_TABLE_SQL)
     await db.execute_write(CREATE_PROGRESS_TABLE_SQL)
     await db.execute_write(CREATE_ERROR_TABLE_SQL)
+
+
+async def set_job_status(
+    db: "Database",
+    job_id: int,
+    status: str,
+    allowed_statuses: Optional[Tuple[str]] = None,
+    reason: Optional[str] = None,
+):
+    if allowed_statuses:
+        # First check the current status
+        current_status = (
+            await db.execute(
+                "select status from _enrichment_jobs where id = ?", (job_id,)
+            )
+        ).first()[0]
+        if current_status not in allowed_statuses:
+            raise ValueError(
+                f"Job {job_id} is in status {current_status}, not in {allowed_statuses}"
+            )
+    await db.execute_write(
+        """
+        update _enrichment_jobs
+        set status = :status
+        {}
+        where id = :job_id
+    """.format(
+            ", cancel_reason = :cancel_reason" if reason else ""
+        ),
+        {"status": status, "job_id": job_id, "cancel_reason": reason},
+    )
+
+
+async def pause_job(db, job_id):
+    await set_job_status(db, job_id, "paused", allowed_statuses=("running",))
+
+
+async def resume_job(datasette, db, job_id):
+    await set_job_status(db, job_id, "running", allowed_statuses=("paused",))
+    all_enrichments = await get_enrichments(datasette)
+    job = dict(
+        (
+            await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
+        ).first()
+    )
+    enrichment = all_enrichments[job["enrichment"]]
+    await enrichment.start_enrichment_in_process(datasette, db, job_id)
+
+
+async def cancel_job(db, job_id, reason: Optional[str] = None):
+    await set_job_status(
+        db,
+        job_id,
+        "cancelled",
+        allowed_statuses=("running", "paused", "pending"),
+        reason=reason,
+    )
+
+
+async def update_job_status_view(datasette, request, action):
+    db = datasette.get_database(request.url_vars["database"])
+    job_id = int(request.url_vars["job_id"])
+    if request.method != "POST":
+        return Response("POST required", status=400)
+    try:
+        if action == "pause":
+            await pause_job(db, job_id)
+        elif action == "resume":
+            await resume_job(datasette, db, job_id)
+        elif action == "cancel":
+            await cancel_job(db, job_id)
+    except ValueError as ve:
+        return Response(str(ve), status=400)
+    return Response.redirect(
+        datasette.urls.path(
+            "/-/enrich/{}/-/jobs/{}".format(request.url_vars["database"], job_id)
+        )
+    )
+
+
+async def pause_job_view(datasette, request):
+    return await update_job_status_view(datasette, request, "pause")
+
+
+async def resume_job_view(datasette, request):
+    return await update_job_status_view(datasette, request, "resume")
+
+
+async def cancel_job_view(datasette, request):
+    return await update_job_status_view(datasette, request, "cancel")
 
 
 async def record_progress(db, job_id, success_count, error_count):
@@ -347,6 +437,14 @@ class Enrichment(ABC):
                 (job["id"],),
             )
             while True:
+                # Check something else hasn't set the state to paused or cancelled
+                job_row = (
+                    await db.execute(
+                        "select status from _enrichment_jobs where id = ?", (job_id,)
+                    )
+                ).first()
+                if not job_row or job_row[0] != "running":
+                    break
                 # Get next batch
                 table_path = datasette.urls.table(
                     job["database_name"], job["table_name"], format="json"
@@ -419,16 +517,30 @@ class Enrichment(ABC):
 @hookimpl
 def register_routes():
     return [
+        # Job management
         (r"^/-/enrich/(?P<database>[^/]+)/-/jobs$", list_jobs_view),
         (r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)$", job_view),
-        (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", enrichment_picker),
         (
-            r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)/(?P<enrichment>[^/]+)$",
-            enrichment_view,
+            r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)/pause$",
+            pause_job_view,
+        ),
+        (
+            r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)/resume$",
+            resume_job_view,
+        ),
+        (
+            r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)/cancel$",
+            cancel_job_view,
         ),
         (
             r"^/-/enrichment-jobs/(?P<database>[^/]+)/(?P<job_id>[0-9]+)$",
             job_progress_view,
+        ),
+        # Select and execute enrichments UI
+        (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", enrichment_picker),
+        (
+            r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)/(?P<enrichment>[^/]+)$",
+            enrichment_view,
         ),
     ]
 
@@ -587,7 +699,7 @@ async def jobs_for_table(datasette, database_name, table_name):
     return jobs
 
 
-POLL_JS = """
+CUSTOM_ELEMENT_JS = """
 class JobProgress extends HTMLElement {
   static observedAttributes = ['api-url', 'poll-interval'];
 
@@ -799,7 +911,11 @@ class JobProgress extends HTMLElement {
   }
 }
 customElements.define('job-progress', JobProgress);
+"""
 
+POLL_JS = (
+    CUSTOM_ELEMENT_JS
+    + """
 async function initEnrichmentProgress(jobs) {
   try {
     // Validate jobs argument
@@ -840,6 +956,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initEnrichmentProgress({{ jobs }});
 });
 """
+)
 
 _restart_running_jobs_lock = asyncio.Lock()
 

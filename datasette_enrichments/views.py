@@ -19,7 +19,7 @@ async def check_permissions(datasette, request, database):
 
 async def job_view(datasette, request):
     "Page showing details of an enrichment job"
-    from . import get_enrichments, ensure_tables
+    from . import get_enrichments, ensure_tables, CUSTOM_ELEMENT_JS
 
     job_id = request.url_vars["job_id"]
     database = request.url_vars["database"]
@@ -52,6 +52,7 @@ async def job_view(datasette, request):
                 "job": job,
                 "config": config,
                 "enrichment": enrichment,
+                "custom_element": CUSTOM_ELEMENT_JS,
             },
             request,
         )

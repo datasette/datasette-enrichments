@@ -35,6 +35,27 @@
   </p>
 {% endif %}
 
+<!-- Pause, Resume, Cancel buttons -->
+<p>
+{% if job.status == "running" %}
+  <form style="display: inline-block;" action="{{ urls.path("/-/enrich/") }}{{ job.database_name }}/-/jobs/{{ job.id }}/pause" method="post">
+    <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
+    <input type="submit" class="core" value="Pause">
+    </form>
+    <form style="display: inline-block;" action="{{ urls.path("/-/enrich/") }}{{ job.database_name }}/-/jobs/{{ job.id }}/cancel" method="post">
+    <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
+    <input type="submit" class="core" value="Cancel">
+    </form>
+  {% elif job.status == "paused" %}
+    <form style="display: inline-block;" action="{{ urls.path("/-/enrich/") }}{{ job.database_name }}/-/jobs/{{ job.id }}/resume" method="post">
+    <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
+    <input type="submit" class="core" value="Resume">
+    </form>
+{% endif %}
+</p>
+
+<job-progress{% if job.status != "running" %} poll-interval="10000"{% endif %} api-url="{{ urls.path("/-/enrichment-jobs/" + job.database_name) }}/{{ job.id }}"></job-progress>
+
 <style>
 dt {
   font-weight: bold;
@@ -86,5 +107,9 @@ dd dl {
   <dt>actor_id</dt>
   <dd>{{ job.actor_id }}</dd>
 </dl>
+
+<script>
+{{ custom_element }}
+</script>
 
 {% endblock %}
