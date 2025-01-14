@@ -8,6 +8,7 @@ from datasette.utils import (
 import json
 from .utils import get_with_auth
 import urllib.parse
+from typing import Optional
 
 
 async def check_permissions(datasette, request, database):
@@ -357,3 +358,68 @@ async def job_progress_view(datasette, request):
             "sections": sections,
         }
     )
+
+
+async def pause_job(db, job_id):
+    from . import set_job_status
+
+    await set_job_status(db, job_id, "paused", allowed_statuses=("running",))
+
+
+async def resume_job(datasette, db, job_id):
+    from . import set_job_status, get_enrichments
+
+    await set_job_status(db, job_id, "running", allowed_statuses=("paused",))
+    all_enrichments = await get_enrichments(datasette)
+    job = dict(
+        (
+            await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
+        ).first()
+    )
+    enrichment = all_enrichments[job["enrichment"]]
+    await enrichment.start_enrichment_in_process(datasette, db, job_id)
+
+
+async def cancel_job(db, job_id, reason: Optional[str] = None):
+    from . import set_job_status
+
+    await set_job_status(
+        db,
+        job_id,
+        "cancelled",
+        allowed_statuses=("running", "paused", "pending"),
+        reason=reason,
+    )
+
+
+async def update_job_status_view(datasette, request, action):
+    db = datasette.get_database(request.url_vars["database"])
+    job_id = int(request.url_vars["job_id"])
+    if request.method != "POST":
+        return Response("POST required", status=400)
+    try:
+        if action == "pause":
+            await pause_job(db, job_id)
+        elif action == "resume":
+            await resume_job(datasette, db, job_id)
+        elif action == "cancel":
+            await cancel_job(db, job_id)
+    except ValueError as ve:
+        return Response(str(ve), status=400)
+    return Response.redirect(
+        datasette.urls.path(
+            "/-/enrich/{}/-/jobs/{}".format(request.url_vars["database"], job_id)
+        )
+    )
+
+
+async def pause_job_view(datasette, request):
+    return await update_job_status_view(datasette, request, "pause")
+
+
+async def resume_job_view(datasette, request):
+    return await update_job_status_view(datasette, request, "resume")
+
+
+async def cancel_job_view(datasette, request):
+    return await update_job_status_view(datasette, request, "cancel")

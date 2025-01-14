@@ -10,13 +10,7 @@ import traceback
 import urllib
 from datasette.plugins import pm
 from markupsafe import Markup, escape
-from .views import (
-    enrichment_picker,
-    enrichment_view,
-    job_view,
-    list_jobs_view,
-    job_progress_view,
-)
+from . import views
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
@@ -121,65 +115,6 @@ async def set_job_status(
         ),
         {"status": status, "job_id": job_id, "cancel_reason": reason},
     )
-
-
-async def pause_job(db, job_id):
-    await set_job_status(db, job_id, "paused", allowed_statuses=("running",))
-
-
-async def resume_job(datasette, db, job_id):
-    await set_job_status(db, job_id, "running", allowed_statuses=("paused",))
-    all_enrichments = await get_enrichments(datasette)
-    job = dict(
-        (
-            await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
-        ).first()
-    )
-    enrichment = all_enrichments[job["enrichment"]]
-    await enrichment.start_enrichment_in_process(datasette, db, job_id)
-
-
-async def cancel_job(db, job_id, reason: Optional[str] = None):
-    await set_job_status(
-        db,
-        job_id,
-        "cancelled",
-        allowed_statuses=("running", "paused", "pending"),
-        reason=reason,
-    )
-
-
-async def update_job_status_view(datasette, request, action):
-    db = datasette.get_database(request.url_vars["database"])
-    job_id = int(request.url_vars["job_id"])
-    if request.method != "POST":
-        return Response("POST required", status=400)
-    try:
-        if action == "pause":
-            await pause_job(db, job_id)
-        elif action == "resume":
-            await resume_job(datasette, db, job_id)
-        elif action == "cancel":
-            await cancel_job(db, job_id)
-    except ValueError as ve:
-        return Response(str(ve), status=400)
-    return Response.redirect(
-        datasette.urls.path(
-            "/-/enrich/{}/-/jobs/{}".format(request.url_vars["database"], job_id)
-        )
-    )
-
-
-async def pause_job_view(datasette, request):
-    return await update_job_status_view(datasette, request, "pause")
-
-
-async def resume_job_view(datasette, request):
-    return await update_job_status_view(datasette, request, "resume")
-
-
-async def cancel_job_view(datasette, request):
-    return await update_job_status_view(datasette, request, "cancel")
 
 
 async def record_progress(db, job_id, success_count, error_count):
@@ -518,29 +453,29 @@ class Enrichment(ABC):
 def register_routes():
     return [
         # Job management
-        (r"^/-/enrich/(?P<database>[^/]+)/-/jobs$", list_jobs_view),
-        (r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)$", job_view),
+        (r"^/-/enrich/(?P<database>[^/]+)/-/jobs$", views.list_jobs_view),
+        (r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)$", views.job_view),
         (
             r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)/pause$",
-            pause_job_view,
+            views.pause_job_view,
         ),
         (
             r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)/resume$",
-            resume_job_view,
+            views.resume_job_view,
         ),
         (
             r"^/-/enrich/(?P<database>[^/]+)/-/jobs/(?P<job_id>[0-9]+)/cancel$",
-            cancel_job_view,
+            views.cancel_job_view,
         ),
         (
             r"^/-/enrichment-jobs/(?P<database>[^/]+)/(?P<job_id>[0-9]+)$",
-            job_progress_view,
+            views.job_progress_view,
         ),
         # Select and execute enrichments UI
-        (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", enrichment_picker),
+        (r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)$", views.enrichment_picker),
         (
             r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)/(?P<enrichment>[^/]+)$",
-            enrichment_view,
+            views.enrichment_view,
         ),
     ]
 
