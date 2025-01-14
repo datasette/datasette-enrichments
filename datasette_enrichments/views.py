@@ -19,13 +19,15 @@ async def check_permissions(datasette, request, database):
 
 async def job_view(datasette, request):
     "Page showing details of an enrichment job"
-    from . import get_enrichments
+    from . import get_enrichments, ensure_tables
 
     job_id = request.url_vars["job_id"]
     database = request.url_vars["database"]
     await check_permissions(datasette, request, database)
 
     db = datasette.get_database(database)
+    await ensure_tables(db)
+
     job = (
         await db.execute(
             "select * from _enrichment_jobs where id = ? and database_name = ?",
@@ -293,4 +295,64 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     )
     return Response.redirect(
         datasette.urls.table(db.name, table) + "?_enrichment_job={}".format(job_id)
+    )
+
+
+async def job_progress_view(datasette, request):
+    from . import get_enrichments, ensure_tables
+
+    job_id = request.url_vars["job_id"]
+    database = request.url_vars["database"]
+    db = datasette.get_database(database)
+    await ensure_tables(db)
+    job = dict(
+        (
+            await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
+        ).first()
+    )
+    if not job:
+        raise NotFound("Job not found")
+    enrichments = await get_enrichments(datasette)
+    enrichment = enrichments.get(job["enrichment"])
+    title = "Job {}: {}".format(
+        job_id, enrichment.name if enrichment else job["enrichment"]
+    )
+    # Build sections
+    progress_chunks = (
+        await db.execute(
+            """
+        select success_count, error_count
+        from _enrichment_progress
+        where job_id = ? order by id
+    """,
+            (job_id,),
+        )
+    ).rows
+    sections = []
+    current = None
+    current_total = 0
+    for row in progress_chunks:
+        section_type = "success" if row["success_count"] else "error"
+        if section_type != current and current_total:
+            sections.append({"type": current, "count": current_total})
+            current_total = 0
+        current = section_type
+        current_total += row["success_count"] + row["error_count"]
+    if current_total:
+        sections.append({"type": current, "count": current_total})
+
+    is_complete = (job["status"] in ("cancelled", "finished")) or (
+        job["done_count"] >= job["row_count"]
+    )
+
+    return Response.json(
+        {
+            "total": job["row_count"],
+            "title": title,
+            "url": datasette.urls.path(
+                "/-/enrich/{}/-/jobs/{}".format(database, job_id)
+            ),
+            "is_complete": is_complete,
+            "sections": sections,
+        }
     )

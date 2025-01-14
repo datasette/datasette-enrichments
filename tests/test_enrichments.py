@@ -5,6 +5,7 @@ from datasette.utils import tilde_encode
 from datasette import version
 from packaging.version import parse
 import pytest, pytest_asyncio
+import random
 import sqlite3
 
 
@@ -28,6 +29,9 @@ async def datasette(tmpdir):
         db.execute(
             "insert into compound_pk_table (category, name, value) values ('dog', 'a', 34)"
         )
+        db.execute("create table has_50_rows (id integer primary key, name text)")
+        for i in range(50):
+            db.execute("insert into has_50_rows (name) values (?)", (str(i),))
 
     datasette = Datasette(
         [data],
@@ -40,6 +44,7 @@ async def datasette(tmpdir):
         },
     )
     datasette._test_db = db
+    await datasette.invoke_startup()
     return datasette
 
 
@@ -293,3 +298,116 @@ async def test_enrichment_with_no_config_form(datasette):
     # Should be two 64 leng strings
     assert len(rows[0][0]) == 64
     assert len(rows[1][0]) == 64
+
+
+@pytest.mark.asyncio
+async def test_enrichment_with_errors(datasette):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response1 = await datasette.client.get(
+        "/-/enrich/data/has_50_rows/haserrors", cookies=cookies
+    )
+    assert "<h2>8 success then 2 errors, repeated</h2>" in response1.text
+
+    csrftoken = response1.cookies["ds_csrftoken"]
+    cookies["ds_csrftoken"] = csrftoken
+    form_data = {"csrftoken": csrftoken}
+
+    response2 = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/haserrors",
+        cookies=cookies,
+        data=form_data,
+    )
+    assert response2.status_code == 302
+    job_id = response2.headers["location"].split("=")[-1]
+
+    # Wait for it to finish and check it worked
+    await wait_for_job(datasette, job_id, "data", timeout=1)
+
+    # Check for errors
+    errors = datasette._test_db.execute(
+        "select job_id, row_pks, error from _enrichment_errors"
+    ).fetchall()
+    assert errors == [
+        (1, "[9, 10]", "Error"),
+        (1, "[19, 20]", "Error"),
+        (1, "[29, 30]", "Error"),
+        (1, "[39, 40]", "Error"),
+        (1, "[49, 50]", "Error"),
+    ]
+    # Check _enrichment_progress has the right sequence of events
+    progress = datasette._test_db.execute(
+        "select success_count, error_count from _enrichment_progress where job_id = ? order by id",
+        (job_id,),
+    ).fetchall()
+    assert progress == [
+        (0, 2),
+        (8, 0),
+        (0, 2),
+        (8, 0),
+        (0, 2),
+        (8, 0),
+        (0, 2),
+        (8, 0),
+        (0, 2),
+        (8, 0),
+    ]
+    # Should add up to 50
+    assert sum([x[0] + x[1] for x in progress]) == 50
+
+    # Check that the job status API works
+    response3 = await datasette.client.get(
+        "/-/enrichment-jobs/data/{}".format(job_id), cookies=cookies
+    )
+    assert response3.status_code == 200
+    data = response3.json()
+    assert data == {
+        "total": 50,
+        "title": "Job {}: 8 success then 2 errors, repeated".format(job_id),
+        "url": "/-/enrich/data/-/jobs/{}".format(job_id),
+        "is_complete": True,
+        "sections": [
+            {"type": "error", "count": 2},
+            {"type": "success", "count": 8},
+            {"type": "error", "count": 2},
+            {"type": "success", "count": 8},
+            {"type": "error", "count": 2},
+            {"type": "success", "count": 8},
+            {"type": "error", "count": 2},
+            {"type": "success", "count": 8},
+            {"type": "error", "count": 2},
+            {"type": "success", "count": 8},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_enrichments_start_on_startup(datasette):
+    # Add a partially complete enrichment to the table
+    db = datasette.get_database("data")
+    from datasette_enrichments import ensure_tables
+
+    job_id = random.randint(1000, 100000)
+
+    await ensure_tables(db)
+    await db.execute_write(
+        """
+        insert into _enrichment_jobs (
+            id, status, enrichment, database_name, table_name, filter_querystring, config,
+            next_cursor, done_count, error_count
+        ) values (
+            ?, 'running', 'haserrors', 'data', 'has_50_rows', '', '{}', '40', 40, 0
+        )
+    """,
+        (job_id,),
+    )
+    # First request to the app should cause that to finish
+    await datasette.client.get("/")
+    await wait_for_job(datasette, job_id, "data", timeout=1)
+    # Check that the enrichment is now complete
+    row = dict(
+        (
+            await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
+        ).first()
+    )
+    assert row["status"] == "finished"
+    assert row["done_count"] == 50

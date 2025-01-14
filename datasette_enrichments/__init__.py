@@ -1,15 +1,22 @@
 from abc import ABC, abstractmethod
 import asyncio
-from datasette import hookimpl
+from datasette import hookimpl, NotFound, Response
 from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
 from datasette_secrets import Secret, get_secret
 import json
 import secrets
+import sys
 import traceback
 import urllib
 from datasette.plugins import pm
 from markupsafe import Markup, escape
-from .views import enrichment_picker, enrichment_view, job_view, list_jobs_view
+from .views import (
+    enrichment_picker,
+    enrichment_view,
+    job_view,
+    list_jobs_view,
+    job_progress_view,
+)
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
 from .utils import get_with_auth, mark_job_complete, pks_for_rows
@@ -59,6 +66,15 @@ create table if not exists _enrichment_jobs (
 )
 """.strip()
 
+CREATE_PROGRESS_TABLE_SQL = """
+create table if not exists _enrichment_progress (
+    id integer primary key,
+    job_id integer references _enrichment_jobs(id),
+    success_count integer,
+    error_count integer
+)
+""".strip()
+
 CREATE_ERROR_TABLE_SQL = """
 create table if not exists _enrichment_errors (
     id integer primary key,
@@ -68,6 +84,22 @@ create table if not exists _enrichment_errors (
     error text
 )
 """.strip()
+
+
+async def ensure_tables(db):
+    await db.execute_write(CREATE_JOB_TABLE_SQL)
+    await db.execute_write(CREATE_PROGRESS_TABLE_SQL)
+    await db.execute_write(CREATE_ERROR_TABLE_SQL)
+
+
+async def record_progress(db, job_id, success_count, error_count):
+    await db.execute_write(
+        """
+        insert into _enrichment_progress (job_id, success_count, error_count)
+        values (?, ?, ?)
+    """,
+        (job_id, success_count, error_count),
+    )
 
 
 @hookimpl
@@ -151,6 +183,7 @@ class Enrichment(ABC):
         """,
             (len(ids), job_id),
         )
+        await record_progress(db, job_id, 0, len(ids))
 
     async def get_config_form(self, datasette: "Datasette", db: "Database", table: str):
         return None
@@ -257,8 +290,8 @@ class Enrichment(ABC):
             row_count = filtered_data["count"]
         else:
             row_count = filtered_data["filtered_table_rows_count"]
-        await db.execute_write(CREATE_JOB_TABLE_SQL)
-        await db.execute_write(CREATE_ERROR_TABLE_SQL)
+
+        await ensure_tables(db)
 
         def _insert(conn):
             with conn:
@@ -303,6 +336,7 @@ class Enrichment(ABC):
 
         async def run_enrichment():
             next_cursor = job["next_cursor"]
+
             # Set state to running
             await db.execute_write(
                 """
@@ -328,7 +362,7 @@ class Enrichment(ABC):
                 # Enrich batch
                 pks = await db.primary_keys(job["table_name"])
                 try:
-                    await async_call_with_supported_arguments(
+                    success_count = await async_call_with_supported_arguments(
                         self.enrich_batch,
                         datasette=datasette,
                         db=db,
@@ -338,6 +372,9 @@ class Enrichment(ABC):
                         config=json.loads(job["config"]),
                         job_id=job_id,
                     )
+                    if success_count is None:
+                        success_count = len(rows)
+                    await record_progress(db, job_id, success_count, 0)
                 except Exception as ex:
                     await self.log_error(db, job_id, pks_for_rows(rows, pks), str(ex))
                 # Update next_cursor
@@ -388,6 +425,10 @@ def register_routes():
         (
             r"^/-/enrich/(?P<database>[^/]+)/(?P<table>[^/]+)/(?P<enrichment>[^/]+)$",
             enrichment_view,
+        ),
+        (
+            r"^/-/enrichment-jobs/(?P<database>[^/]+)/(?P<job_id>[0-9]+)$",
+            job_progress_view,
         ),
     ]
 
@@ -532,3 +573,353 @@ def actor_from_request(datasette, request):
         secret_token, datasette._secret_enrichments_token
     ):
         return {"_datasette_enrichments": True}
+
+
+async def jobs_for_table(datasette, database_name, table_name):
+    jobs = []
+    db = datasette.get_database(database_name)
+    if await db.table_exists("_enrichment_jobs"):
+        sql = "select * from _enrichment_jobs where database_name = ? and table_name = ? and status = 'running' order by id desc"
+        jobs = [
+            dict(row)
+            for row in (await db.execute(sql, (database_name, table_name))).rows
+        ]
+    return jobs
+
+
+POLL_JS = """
+class JobProgress extends HTMLElement {
+  static observedAttributes = ['api-url', 'poll-interval'];
+
+  constructor() {
+    super();
+    this.pollInterval = null;
+    this.sections = [];
+    this.total = 0;
+    this.initialized = false;
+    this.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = `
+      :host {
+        display: none;
+        font-family: Helvetica, Arial, sans-serif;
+      }
+
+      :host(.initialized) {
+        display: block;
+      }
+
+      .container {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 1rem;
+      }
+
+      h2 {
+        margin: 0 0 1rem 0;
+        font-size: 1.25rem;
+        font-weight: 500;
+      }
+
+      .job-link {
+        color: #2196F3;
+        text-decoration: none;
+      }
+
+      .job-link:hover {
+        text-decoration: underline;
+      }
+
+      .progress-wrapper {
+        width: 100%;
+        height: 24px;
+        background: #f5f5f5;
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .progress-bar {
+        height: 100%;
+        position: absolute;
+        transition: all 0.3s ease;
+      }
+
+      .progress-success {
+        background: #4CAF50;
+      }
+
+      .progress-error {
+        background: #f44336;
+      }
+
+      .progress-stats {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 0.5rem;
+        color: #666;
+      }
+
+      .stat {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .stat-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+
+      .stat-dot.success {
+        background: #4CAF50;
+      }
+
+      .stat-dot.error {
+        background: #f44336;
+      }
+    `;
+
+    const template = document.createElement('template');
+    template.innerHTML = `
+      <div class="container" role="region" aria-label="Task enrichment progress">
+        <h2>
+          <a href="#" class="job-link"></a>
+        </h2>
+        <div class="progress-wrapper" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        </div>
+        <div class="progress-stats" aria-live="polite">
+          <div class="stat">
+            <div class="stat-dot success" aria-hidden="true"></div>
+            <span class="completed-count">0</span>
+            <span class="sr-only">tasks</span> completed
+          </div>
+          <div class="stat">
+            <div class="stat-dot error" aria-hidden="true"></div>
+            <span class="error-count">0</span>
+            <span class="sr-only">tasks with</span> errors
+          </div>
+          <div class="stat">
+            Total: <span class="total-count">0</span>
+            <span class="sr-only">tasks</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.shadowRoot.appendChild(style);
+    this.shadowRoot.appendChild(template.content.cloneNode(true));
+  }
+
+  connectedCallback() {
+    const apiUrl = this.getAttribute('api-url');
+    if (apiUrl) {
+      this.startPolling();
+    }
+  }
+
+  disconnectedCallback() {
+    this.stopPolling();
+  }
+
+  async startPolling() {
+    const pollMs = parseInt(this.getAttribute('poll-interval')) || 1000;
+    const apiUrl = this.getAttribute('api-url');
+
+    const poll = async () => {
+      try {
+        const response = await fetch(apiUrl);
+        // Stop polling if response is not OK (non-200 status)
+        if (!response.ok) {
+          console.error(`Failed to fetch progress: ${response.status} ${response.statusText}`);
+          this.stopPolling();
+          return;
+        }
+        const data = await response.json();
+        // Initialize component with first API response
+        if (!this.initialized) {
+          this.initialized = true;
+          this.classList.add('initialized');
+          this.total = data.total;
+          this.shadowRoot.querySelector('.total-count').textContent = this.total;
+          this.shadowRoot.querySelector('.job-link').textContent = data.title;
+          this.shadowRoot.querySelector('.job-link').setAttribute('href', data.url);
+        }
+        this.updateProgress(data.sections);
+        if (data.is_complete) {
+          this.stopPolling();
+        }
+      } catch (error) {
+        console.error('Error polling progress:', error);
+        this.stopPolling();
+      }
+    };
+    this.pollInterval = setInterval(poll, pollMs);
+  }
+
+  stopPolling() {
+    clearInterval(this.pollInterval);
+  }
+
+  updateProgress(sections) {
+    const progressWrapper = this.shadowRoot.querySelector('.progress-wrapper');
+    // Clear existing bars
+    progressWrapper.innerHTML = '';
+    // Calculate totals
+    let completed = 0;
+    let errors = 0;
+    let currentPosition = 0;
+    // Create and position bars
+    sections.forEach(section => {
+      const width = (section.count / this.total) * 100;
+      const bar = document.createElement('div');
+      bar.className = `progress-bar progress-${section.type}`;
+      bar.style.width = `${width}%`;
+      bar.style.left = `${currentPosition}%`;
+      progressWrapper.appendChild(bar);
+      currentPosition += width;
+      if (section.type === 'success') {
+        completed += section.count;
+      } else {
+        errors += section.count;
+      }
+    });
+    // Update stats
+    this.shadowRoot.querySelector('.completed-count').textContent = completed;
+    this.shadowRoot.querySelector('.error-count').textContent = errors;
+    const totalProgress = ((completed + errors) / this.total) * 100;
+    // Update ARIA
+    progressWrapper.setAttribute('aria-valuenow', totalProgress);
+    progressWrapper.setAttribute('aria-label',
+      `Overall progress: ${Math.round(totalProgress)}%. ` +
+      `${completed} tasks completed, ${errors} errors, ${this.total} total tasks`
+    );
+  }
+}
+customElements.define('job-progress', JobProgress);
+
+async function initEnrichmentProgress(jobs) {
+  try {
+    // Validate jobs argument
+    if (!Array.isArray(jobs)) {
+      throw new Error('jobs argument must be an array');
+    }
+
+    // Find the first table element
+    const firstTable = document.querySelector('table');
+    if (!firstTable) {
+      console.warn('No table element found on page');
+      return;
+    }
+
+    // Create a container for our progress elements
+    const container = document.createElement('div');
+
+    // Add each job's progress element
+    jobs.forEach(job => {
+      if (!job.id) {
+        console.warn('Job missing ID, skipping:', job);
+        return;
+      }
+      const progressElement = document.createElement('job-progress');
+      progressElement.setAttribute('api-url', `/-/enrichment-jobs/{{ database }}/${job.id}`);
+      progressElement.style.marginBottom = '1rem';
+      container.appendChild(progressElement);
+    });
+
+    // Insert the container before the table
+    firstTable.parentNode.insertBefore(container, firstTable);
+  } catch (error) {
+    console.error('Error initializing enrichment progress:', error);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initEnrichmentProgress({{ jobs }});
+});
+"""
+
+_restart_running_jobs_lock = asyncio.Lock()
+
+
+async def _restart_running_jobs_task(datasette):
+    # For each database known to Datasette, look for running jobs
+    for database_name in datasette.databases:
+        db = datasette.get_database(database_name)
+
+        # If the _enrichment_jobs table doesn't exist in this DB, skip
+        table_names = await db.table_names()
+        if "_enrichment_jobs" not in table_names:
+            continue
+
+        # Find jobs marked as 'running'
+        running_jobs = (
+            await db.execute(
+                """
+            SELECT * FROM _enrichment_jobs
+            WHERE status = 'running'
+            """
+            )
+        ).rows
+
+        # Grab all known enrichments
+        all_enrichments = await get_enrichments(datasette)
+
+        # Start each running job again
+        for job in running_jobs:
+            job_id = job["id"]
+            enrichment_slug = job["enrichment"]
+
+            # Look up the enrichment class by its slug
+            if enrichment_slug in all_enrichments:
+                enrichment = all_enrichments[enrichment_slug]
+                # Resume from wherever it left off
+                await enrichment.start_enrichment_in_process(datasette, db, job_id)
+            else:
+                print("Unknown enrichment: {}".format(enrichment_slug), file=sys.stderr)
+
+
+async def restart_running_jobs(datasette):
+    """
+    Start the background task if it hasn't been started yet.
+    Uses a lock to ensure the task is only started once.
+    """
+    if hasattr(datasette, "_restart_running_jobs_task_started"):
+        return
+    # Lock to avoid race condition if two requests come in at once
+    async with _restart_running_jobs_lock:
+        if not hasattr(datasette, "_restart_running_jobs_task_started"):
+            datasette._restart_running_jobs_task_started = True
+            asyncio.create_task(_restart_running_jobs_task(datasette))
+
+
+@hookimpl
+def asgi_wrapper(datasette):
+    def wrap_with_task_starter(app):
+        async def wrapped_app(scope, receive, send):
+            await restart_running_jobs(datasette)
+            await app(scope, receive, send)
+
+        return wrapped_app
+
+    return wrap_with_task_starter
+
+
+@hookimpl
+def extra_body_script(datasette, database, table, view_name):
+    async def inner():
+        if view_name != "table":
+            return ""
+        jobs = await jobs_for_table(datasette, database, table)
+        if not jobs:
+            return ""
+        return {
+            "module": True,
+            "script": POLL_JS.replace("{{ database }}", database).replace(
+                "{{ jobs }}", json.dumps(jobs)
+            ),
+        }
+
+    return inner

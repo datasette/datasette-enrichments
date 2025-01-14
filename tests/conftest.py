@@ -131,12 +131,35 @@ def load_uppercase_plugin():
                     [sha_256] + [row[pk] for pk in pks],
                 )
 
+    class HasErrors(Enrichment):
+        name = "8 success then 2 errors, repeated"
+        slug = "haserrors"
+        description = "To demonstrate an enrichment with errors"
+        batch_size = 10
+
+        async def enrich_batch(
+            self,
+            db: Database,
+            table: str,
+            rows: List[dict],
+            pks: List[str],
+            job_id: int,
+        ) -> int:
+            assert len(pks) == 1
+            pk = pks[0]
+            success_count = len(rows)
+            if len(rows) > 8:
+                ids = [row[pk] for row in rows[8:]]
+                success_count -= len(ids)
+                await self.log_error(db, job_id, ids, "Error")
+            return success_count
+
     class EnrichmentsDemoPlugin:
         __name__ = "EnrichmentsDemoPlugin"
 
         @hookimpl
         def register_enrichments(self):
-            return [UppercaseDemo(), SecretReplacePlugin(), HashRows()]
+            return [UppercaseDemo(), SecretReplacePlugin(), HashRows(), HasErrors()]
 
     pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")
     try:
