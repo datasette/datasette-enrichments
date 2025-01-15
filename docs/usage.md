@@ -15,3 +15,18 @@ Enter your settings and click "Enrich data" to start the enrichment running.
 
 Enrichments can take between several seconds and several minutes to run, depending on the number of rows and the complexity of the enrichment.
 
+(usage-jobs)=
+## Managing enrichment jobs
+
+Each enrichment run triggers a **job** that is managed by Datasette.
+
+Jobs are tracked in the `_enrichment_jobs` table in the same database as the table that is being enriched.
+
+You can view all of the jobs that are running or have run against a particular database using the database action menu's Enrichment jobs item. The table action menu has a similar item for viewing jobs that have run against that table.
+
+Each job gets its own page. This page shows how many rows have been processed and if there have been any errors.
+
+The job page also includes buttons for pausing, resuming and cancelling an enrichment job.
+
+When the Datasette server restarts any running jobs will be automatically continued from where they left off.
+
