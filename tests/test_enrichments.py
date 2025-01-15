@@ -411,3 +411,74 @@ async def test_enrichments_start_on_startup(datasette):
     )
     assert row["status"] == "finished"
     assert row["done_count"] == 50
+
+
+@pytest.mark.asyncio
+async def test_enrichments_pause_resume_cancel(datasette):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response1 = await datasette.client.get(
+        "/-/enrich/data/has_50_rows/queue", cookies=cookies
+    )
+    assert "<h2>Queue controlled enrichment</h2>" in response1.text
+
+    csrftoken = response1.cookies["ds_csrftoken"]
+    cookies["ds_csrftoken"] = csrftoken
+    form_data = {"csrftoken": csrftoken}
+
+    response2 = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/queue",
+        cookies=cookies,
+        data=form_data,
+    )
+    job_id = response2.headers["location"].split("=")[-1]
+
+    # Now feed it some results
+    queue = datasette.enrichment_queue
+    for i in range(10):
+        await queue.put(str(i))
+
+    await asyncio.sleep(0.1)
+
+    # Call the API and check that 10 are done
+    response3 = await datasette.client.get(
+        "/-/enrichment-jobs/data/{}".format(job_id), cookies=cookies
+    )
+    assert response3.status_code == 200
+    data = response3.json()
+    assert data == {
+        "total": 50,
+        "title": "Job 1: Queue controlled enrichment",
+        "url": "/-/enrich/data/-/jobs/{}".format(job_id),
+        "is_complete": False,
+        "sections": [{"type": "success", "count": 10}],
+    }
+
+    def get_status():
+        return datasette._test_db.execute(
+            "select status from _enrichment_jobs where id = ?", (job_id,)
+        ).fetchone()[0]
+
+    # Now pause it
+    response4 = await datasette.client.post(
+        "/-/enrich/data/-/jobs/{}/pause".format(job_id), cookies=cookies, data=form_data
+    )
+    assert response4.status_code == 302
+    assert get_status() == "paused"
+
+    # And resume it
+    response5 = await datasette.client.post(
+        "/-/enrich/data/-/jobs/{}/resume".format(job_id),
+        cookies=cookies,
+        data=form_data,
+    )
+    assert response5.status_code == 302
+    assert get_status() == "running"
+
+    # And cancel it
+    response6 = await datasette.client.post(
+        "/-/enrich/data/-/jobs/{}/cancel".format(job_id),
+        cookies=cookies,
+        data=form_data,
+    )
+    assert response6.status_code == 302
+    assert get_status() == "cancelled"

@@ -154,12 +154,53 @@ def load_uppercase_plugin():
                 await self.log_error(db, job_id, ids, "Error")
             return success_count
 
+    class QueueControlledEnrichment(Enrichment):
+        name = "Queue controlled enrichment"
+        slug = "queue"
+        description = "An enrichment that waits for results from a queue for each row"
+        batch_size = 1
+
+        async def initialize(self, datasette, db, table, config):
+            datasette.enrichment_queue = asyncio.Queue()
+            datasette.enrichment_processed_count = 0
+            await db.execute_write(
+                f"alter table [{table}] add column queue_result text"
+            )
+
+        async def enrich_batch(
+            self,
+            datasette,
+            db: Database,
+            table: str,
+            rows: List[dict],
+            pks: List[str],
+        ):
+            row = rows[0]
+            result = await datasette.enrichment_queue.get()
+            datasette.enrichment_processed_count += 1
+            wheres = " and ".join(f'"{pk}" = ?' for pk in pks)
+            await db.execute_write(
+                f"""
+                update [{table}]
+                set queue_result = ?
+                where {wheres}
+                """,
+                [result] + [row[pk] for pk in pks],
+            )
+            datasette.enrichment_queue.task_done()
+
     class EnrichmentsDemoPlugin:
         __name__ = "EnrichmentsDemoPlugin"
 
         @hookimpl
         def register_enrichments(self):
-            return [UppercaseDemo(), SecretReplacePlugin(), HashRows(), HasErrors()]
+            return [
+                UppercaseDemo(),
+                SecretReplacePlugin(),
+                HashRows(),
+                HasErrors(),
+                QueueControlledEnrichment(),
+            ]
 
     pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")
     try:
