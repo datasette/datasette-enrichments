@@ -4,7 +4,8 @@ from datasette.app import Datasette
 from datasette.utils import tilde_encode
 from datasette import version
 from packaging.version import parse
-import pytest, pytest_asyncio
+import pytest
+import pytest_asyncio
 import random
 import sqlite3
 
@@ -285,17 +286,13 @@ async def test_enrichment_with_no_config_form(datasette):
     # Wait for it to finish and check it worked
     await wait_for_job(datasette, job_id, "data", timeout=1)
 
-    # Check for errors
-    errors = datasette._test_db.execute(
-        "select job_id, row_pks, error from _enrichment_errors"
-    ).fetchall()
     job_details = datasette._test_db.execute(
         "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
     ).fetchone()
     assert job_details == (0, 2)
     # Check rows show enrichment ran correctly
     rows = datasette._test_db.execute("select sha_256 from t order by id").fetchall()
-    # Should be two 64 leng strings
+    # Should be two 64 length strings
     assert len(rows[0][0]) == 64
     assert len(rows[1][0]) == 64
 

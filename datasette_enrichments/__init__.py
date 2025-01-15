@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import asyncio
 import datetime
-from datasette import hookimpl, NotFound, Response
+from datasette import hookimpl
 from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
 from datasette_secrets import Secret, get_secret
 import json
@@ -21,7 +21,7 @@ from . import hookspecs
 
 from datasette.utils import await_me_maybe
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from datasette.app import Datasette

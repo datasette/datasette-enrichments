@@ -8,7 +8,6 @@ from datasette.utils import (
 import json
 from .utils import get_with_auth
 import urllib.parse
-from typing import Optional
 
 
 async def check_permissions(datasette, request, database):
@@ -24,7 +23,6 @@ async def job_view(datasette, request):
         get_enrichments,
         ensure_tables,
         CUSTOM_ELEMENT_JS,
-        JAN_1_2025_EPOCH,
         ms_since_2025_to_datetime,
     )
 
