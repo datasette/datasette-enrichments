@@ -177,6 +177,10 @@ def load_uppercase_plugin():
         ):
             row = rows[0]
             result = await datasette.enrichment_queue.get()
+            if result == "pause":
+                raise self.Pause("pause message")
+            if result == "cancel":
+                raise self.Cancel("cancel message")
             datasette.enrichment_processed_count += 1
             wheres = " and ".join(f'"{pk}" = ?' for pk in pks)
             await db.execute_write(

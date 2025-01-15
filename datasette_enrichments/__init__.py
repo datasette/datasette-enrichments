@@ -1,11 +1,13 @@
 from abc import ABC, abstractmethod
 import asyncio
+import datetime
 from datasette import hookimpl, NotFound, Response
 from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
 from datasette_secrets import Secret, get_secret
 import json
 import secrets
 import sys
+import time
 import traceback
 import urllib
 from datasette.plugins import pm
@@ -29,6 +31,15 @@ pm.add_hookspecs(hookspecs)
 
 
 IdType = Union[int, str, Tuple[Union[int, str], ...]]
+
+# Custom epoch to save space in the _enrichment_progress table
+JAN_1_2025_EPOCH = int(datetime.datetime(2025, 1, 1).timestamp() * 1000)
+
+
+def ms_since_2025_to_datetime(ms_since_2025):
+    unix_ms = JAN_1_2025_EPOCH + ms_since_2025
+    unix_seconds = unix_ms / 1000
+    return datetime.datetime.fromtimestamp(unix_seconds, tz=datetime.timezone.utc)
 
 
 async def get_enrichments(datasette):
@@ -64,8 +75,10 @@ CREATE_PROGRESS_TABLE_SQL = """
 create table if not exists _enrichment_progress (
     id integer primary key,
     job_id integer references _enrichment_jobs(id),
+    timestamp_ms_2025 integer, -- milliseconds since 2025-01-01
     success_count integer,
-    error_count integer
+    error_count integer,
+    message text
 )
 """.strip()
 
@@ -91,7 +104,7 @@ async def set_job_status(
     job_id: int,
     status: str,
     allowed_statuses: Optional[Tuple[str]] = None,
-    reason: Optional[str] = None,
+    message: Optional[str] = None,
 ):
     if allowed_statuses:
         # First check the current status
@@ -111,19 +124,36 @@ async def set_job_status(
         {}
         where id = :job_id
     """.format(
-            ", cancel_reason = :cancel_reason" if reason else ""
+            ", cancel_reason = :cancel_reason"
+            if (message and status == "cancelled")
+            else ""
         ),
-        {"status": status, "job_id": job_id, "cancel_reason": reason},
+        {"status": status, "job_id": job_id, "cancel_reason": message},
     )
+    progress_message = status
+    if message:
+        progress_message += ": " + message
+    await record_progress(db, job_id, 0, 0, progress_message)
 
 
-async def record_progress(db, job_id, success_count, error_count):
+async def record_progress(db, job_id, success_count, error_count, message=""):
     await db.execute_write(
         """
-        insert into _enrichment_progress (job_id, success_count, error_count)
-        values (?, ?, ?)
-    """,
-        (job_id, success_count, error_count),
+        insert into _enrichment_progress (
+            job_id, timestamp_ms_2025, success_count, error_count, message
+        ) values (
+            :job_id, :timestamp_ms_2025, :success_count, :error_count, {}
+        )
+    """.format(
+            ":message" if message else "null"
+        ),
+        {
+            "job_id": job_id,
+            "timestamp_ms_2025": int(time.time() * 1000) - JAN_1_2025_EPOCH,
+            "success_count": success_count,
+            "error_count": error_count,
+            "message": message,
+        },
     )
 
 
@@ -147,6 +177,20 @@ class Enrichment(ABC):
     # Cancel run after this many errors
     default_max_errors: int = 5
     log_traceback: bool = False
+
+    class Cancel(Exception):
+        def __init__(self, reason: Optional[str] = None):
+            self.reason = reason
+
+        def __str__(self) -> str:
+            return self.reason or "Cancelled by enrichment"
+
+    class Pause(Exception):
+        def __init__(self, reason: Optional[str] = None):
+            self.reason = reason
+
+        def __str__(self) -> str:
+            return self.reason or "Paused by enrichment"
 
     @property
     @abstractmethod
@@ -408,6 +452,12 @@ class Enrichment(ABC):
                     if success_count is None:
                         success_count = len(rows)
                     await record_progress(db, job_id, success_count, 0)
+                except self.Cancel as ex:
+                    await set_job_status(db, job_id, "cancelled", message=str(ex))
+                    return
+                except self.Pause as ex:
+                    await set_job_status(db, job_id, "paused", message=str(ex))
+                    return
                 except Exception as ex:
                     await self.log_error(db, job_id, pks_for_rows(rows, pks), str(ex))
                 # Update next_cursor
@@ -730,11 +780,13 @@ class JobProgress extends HTMLElement {
     `;
 
     const template = document.createElement('template');
+    let h2 = `<h2><a href="#" class="job-link"></a></h2>`;
+    if (this.getAttribute('hide-title')) {
+       h2 = h2.replace('<h2>', '<h2 style="display: none;">');
+    }
     template.innerHTML = `
       <div class="container" role="region" aria-label="Task enrichment progress">
-        <h2>
-          <a href="#" class="job-link"></a>
-        </h2>
+        ${h2}
         <div class="progress-wrapper" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         </div>
         <div class="progress-stats" aria-live="polite">
@@ -804,6 +856,7 @@ class JobProgress extends HTMLElement {
       }
     };
     this.pollInterval = setInterval(poll, pollMs);
+    poll();
   }
 
   stopPolling() {

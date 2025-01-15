@@ -20,7 +20,13 @@ async def check_permissions(datasette, request, database):
 
 async def job_view(datasette, request):
     "Page showing details of an enrichment job"
-    from . import get_enrichments, ensure_tables, CUSTOM_ELEMENT_JS
+    from . import (
+        get_enrichments,
+        ensure_tables,
+        CUSTOM_ELEMENT_JS,
+        JAN_1_2025_EPOCH,
+        ms_since_2025_to_datetime,
+    )
 
     job_id = request.url_vars["job_id"]
     database = request.url_vars["database"]
@@ -43,6 +49,24 @@ async def job_view(datasette, request):
         job["enrichment"]
     )  # May be None if plugin not installed
 
+    messages = [
+        dict(row)
+        for row in (
+            await db.execute(
+                """
+            select timestamp_ms_2025, message
+            from _enrichment_progress
+            where job_id = ?
+            and message is not null
+            order by id
+            """,
+                (job_id,),
+            )
+        ).rows
+    ]
+    for message in messages:
+        message["timestamp"] = ms_since_2025_to_datetime(message["timestamp_ms_2025"])
+
     job = dict(job)
     config = json.loads(job["config"])
     return Response.html(
@@ -54,6 +78,7 @@ async def job_view(datasette, request):
                 "config": config,
                 "enrichment": enrichment,
                 "custom_element": CUSTOM_ELEMENT_JS,
+                "messages": messages,
             },
             request,
         )
@@ -360,16 +385,20 @@ async def job_progress_view(datasette, request):
     )
 
 
-async def pause_job(db, job_id):
+async def pause_job(db, job_id, message):
     from . import set_job_status
 
-    await set_job_status(db, job_id, "paused", allowed_statuses=("running",))
+    await set_job_status(
+        db, job_id, "paused", allowed_statuses=("running",), message=message
+    )
 
 
-async def resume_job(datasette, db, job_id):
+async def resume_job(datasette, db, job_id, message):
     from . import set_job_status, get_enrichments
 
-    await set_job_status(db, job_id, "running", allowed_statuses=("paused",))
+    await set_job_status(
+        db, job_id, "running", allowed_statuses=("paused",), message=message
+    )
     all_enrichments = await get_enrichments(datasette)
     job = dict(
         (
@@ -380,7 +409,7 @@ async def resume_job(datasette, db, job_id):
     await enrichment.start_enrichment_in_process(datasette, db, job_id)
 
 
-async def cancel_job(db, job_id, reason: Optional[str] = None):
+async def cancel_job(db, job_id, message):
     from . import set_job_status
 
     await set_job_status(
@@ -388,22 +417,25 @@ async def cancel_job(db, job_id, reason: Optional[str] = None):
         job_id,
         "cancelled",
         allowed_statuses=("running", "paused", "pending"),
-        reason=reason,
+        message=message,
     )
 
 
 async def update_job_status_view(datasette, request, action):
     db = datasette.get_database(request.url_vars["database"])
+    message = ""
+    if request.actor and request.actor.get("id"):
+        message = "by {}".format(request.actor.get("id"))
     job_id = int(request.url_vars["job_id"])
     if request.method != "POST":
         return Response("POST required", status=400)
     try:
         if action == "pause":
-            await pause_job(db, job_id)
+            await pause_job(db, job_id, message)
         elif action == "resume":
-            await resume_job(datasette, db, job_id)
+            await resume_job(datasette, db, job_id, message)
         elif action == "cancel":
-            await cancel_job(db, job_id)
+            await cancel_job(db, job_id, message)
     except ValueError as ve:
         return Response(str(ve), status=400)
     return Response.redirect(

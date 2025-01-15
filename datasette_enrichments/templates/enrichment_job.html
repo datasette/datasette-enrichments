@@ -30,7 +30,7 @@
 {% if enrichment %}
   <p>Ran <strong>{{ enrichment.name }}</strong> at {{ job.started_at }}, status is <strong>{{ job.status }}</strong>.
   {% if job.error_count %}
-    <a href="{{ urls.table(job.database_name, "_enrichment_errors") }}?_sort_desc=id&amp;job_id={{ job.id }}">{{ job.error_count }} error{{ job.error_count == 1 and "" or "s" }}</a>
+    <a href="{{ urls.table(job.database_name, "_enrichment_errors") }}?_sort_desc=id&amp;job_id={{ job.id }}">{{ job.error_count }} error{% if job.error_count != 1 %}s{% endif %}</a>
   {% endif %}
   </p>
 {% endif %}
@@ -51,10 +51,14 @@
     <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
     <input type="submit" class="core" value="Resume">
     </form>
+    <form style="display: inline-block;" action="{{ urls.path("/-/enrich/") }}{{ job.database_name }}/-/jobs/{{ job.id }}/cancel" method="post">
+    <input type="hidden" name="csrftoken" value="{{ csrftoken() }}">
+    <input type="submit" class="core" value="Cancel">
+    </form>
 {% endif %}
 </p>
 
-<job-progress{% if job.status != "running" %} poll-interval="10000"{% endif %} api-url="{{ urls.path("/-/enrichment-jobs/" + job.database_name) }}/{{ job.id }}"></job-progress>
+<job-progress{% if job.status != "running" %} poll-interval="5000"{% endif %} api-url="{{ urls.path("/-/enrichment-jobs/" + job.database_name) }}/{{ job.id }}" hide-title="1"></job-progress>
 
 <style>
 dt {
@@ -66,7 +70,17 @@ dd {
 dd dl {
   margin-left: 1em;
 }
+.twocols {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+.twocols > dl {
+  flex: 1;
+}
 </style>
+
+<div class="twocols">
 
 <dl>
   <dt>id</dt>
@@ -88,7 +102,6 @@ dd dl {
         <li><strong>{{ key }}</strong>: {{ value }}</li>
       {% endfor %}
     </ul>
-    </dl>
   </dd>
   <dt>started_at</dt>
   <dd>{{ job.started_at }}</dd>
@@ -108,8 +121,18 @@ dd dl {
   <dd>{{ job.actor_id }}</dd>
 </dl>
 
+{% if messages %}
+<dl>
+  {% for message in messages %}
+    <dt>{{ message.timestamp.isoformat().split('.')[0] }}</dt>
+    <dd>{{ message.message }}</dd>
+  {% endfor %}
+</dl>
+{% endif %}
+</div>
+
 <script>
-{{ custom_element }}
+{{ custom_element|safe }}
 </script>
 
 {% endblock %}

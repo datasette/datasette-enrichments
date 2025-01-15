@@ -413,8 +413,14 @@ async def test_enrichments_start_on_startup(datasette):
     assert row["done_count"] == 50
 
 
+def get_status(datasette, job_id):
+    return datasette._test_db.execute(
+        "select status from _enrichment_jobs where id = ?", (job_id,)
+    ).fetchone()[0]
+
+
 @pytest.mark.asyncio
-async def test_enrichments_pause_resume_cancel(datasette):
+async def test_enrichments_pause_resume_cancel_buttons(datasette):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response1 = await datasette.client.get(
         "/-/enrich/data/has_50_rows/queue", cookies=cookies
@@ -430,11 +436,11 @@ async def test_enrichments_pause_resume_cancel(datasette):
         cookies=cookies,
         data=form_data,
     )
-    job_id = response2.headers["location"].split("=")[-1]
+    job_id = int(response2.headers["location"].split("=")[-1])
 
     # Now feed it some results
     queue = datasette.enrichment_queue
-    for i in range(10):
+    for i in range(3):
         await queue.put(str(i))
 
     await asyncio.sleep(0.1)
@@ -450,20 +456,15 @@ async def test_enrichments_pause_resume_cancel(datasette):
         "title": "Job 1: Queue controlled enrichment",
         "url": "/-/enrich/data/-/jobs/{}".format(job_id),
         "is_complete": False,
-        "sections": [{"type": "success", "count": 10}],
+        "sections": [{"type": "success", "count": 3}],
     }
-
-    def get_status():
-        return datasette._test_db.execute(
-            "select status from _enrichment_jobs where id = ?", (job_id,)
-        ).fetchone()[0]
 
     # Now pause it
     response4 = await datasette.client.post(
         "/-/enrich/data/-/jobs/{}/pause".format(job_id), cookies=cookies, data=form_data
     )
     assert response4.status_code == 302
-    assert get_status() == "paused"
+    assert get_status(datasette, job_id) == "paused"
 
     # And resume it
     response5 = await datasette.client.post(
@@ -472,7 +473,7 @@ async def test_enrichments_pause_resume_cancel(datasette):
         data=form_data,
     )
     assert response5.status_code == 302
-    assert get_status() == "running"
+    assert get_status(datasette, job_id) == "running"
 
     # And cancel it
     response6 = await datasette.client.post(
@@ -481,4 +482,133 @@ async def test_enrichments_pause_resume_cancel(datasette):
         data=form_data,
     )
     assert response6.status_code == 302
-    assert get_status() == "cancelled"
+    assert get_status(datasette, job_id) == "cancelled"
+
+    # Check the messages were correctly logged
+    cursor = datasette._test_db.cursor()
+    cursor.row_factory = sqlite3.Row
+    rows = [
+        dict(row)
+        for row in cursor.execute(
+            """
+            select job_id, success_count, error_count, message
+            from _enrichment_progress where job_id = ? order by id
+            """,
+            (job_id,),
+        )
+    ]
+    assert rows == [
+        {
+            "job_id": job_id,
+            "success_count": 1,
+            "error_count": 0,
+            "message": None,
+        },
+        {
+            "job_id": job_id,
+            "success_count": 1,
+            "error_count": 0,
+            "message": None,
+        },
+        {
+            "job_id": job_id,
+            "success_count": 1,
+            "error_count": 0,
+            "message": None,
+        },
+        {
+            "job_id": job_id,
+            "success_count": 0,
+            "error_count": 0,
+            "message": "paused: by root",
+        },
+        {
+            "job_id": job_id,
+            "success_count": 0,
+            "error_count": 0,
+            "message": "running: by root",
+        },
+        {
+            "job_id": job_id,
+            "success_count": 0,
+            "error_count": 0,
+            "message": "cancelled: by root",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_enrichments_pause_cancel_exceptions(datasette):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response1 = await datasette.client.get(
+        "/-/enrich/data/has_50_rows/queue", cookies=cookies
+    )
+    csrftoken = response1.cookies["ds_csrftoken"]
+    cookies["ds_csrftoken"] = csrftoken
+    form_data = {"csrftoken": csrftoken}
+    response2 = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/queue",
+        cookies=cookies,
+        data=form_data,
+    )
+    job_id = int(response2.headers["location"].split("=")[-1])
+
+    assert get_status(datasette, job_id) == "pending"
+    await asyncio.sleep(0.1)
+    assert get_status(datasette, job_id) == "running"
+
+    # Now feed it three results and then pause then cancel
+    queue = datasette.enrichment_queue
+    for i in range(3):
+        await queue.put(str(i))
+    await queue.put("pause")
+    await asyncio.sleep(0.1)
+    assert get_status(datasette, job_id) == "paused"
+
+    # Resume it again
+    await datasette.client.post(
+        "/-/enrich/data/-/jobs/{}/resume".format(job_id),
+        cookies=cookies,
+        data=form_data,
+    )
+
+    # Now cancel it
+    await queue.put("cancel")
+    await asyncio.sleep(0.1)
+    assert get_status(datasette, job_id) == "cancelled"
+
+    cursor = datasette._test_db.cursor()
+    cursor.row_factory = sqlite3.Row
+    rows = [
+        dict(row)
+        for row in cursor.execute(
+            """
+            select job_id, success_count, error_count, message
+            from _enrichment_progress where job_id = ? order by id
+            """,
+            (job_id,),
+        )
+    ]
+    assert rows == [
+        {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
+        {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
+        {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
+        {
+            "job_id": job_id,
+            "success_count": 0,
+            "error_count": 0,
+            "message": "paused: pause message",
+        },
+        {
+            "job_id": job_id,
+            "success_count": 0,
+            "error_count": 0,
+            "message": "running: by root",
+        },
+        {
+            "job_id": job_id,
+            "success_count": 0,
+            "error_count": 0,
+            "message": "cancelled: cancel message",
+        },
+    ]

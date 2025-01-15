@@ -118,6 +118,22 @@ Your method can optionally return an integer count of the number of rows that we
 
 If you do not return a count, the system will assume that a call to `enrich_batch()` which did not raise an exception processed all of the rows that were passed to it.
 
+#### Pausing or cancelling the run
+
+Code inside a `enrich_batch()` method can request that the run be paused or cancelled by raising special exceptions.
+
+```python
+async def enrich_batch(...):
+    ...
+    if no_tokens_left:
+        raise self.Pause("Ran out of tokens")
+```
+Or to cancel the run entirely:
+```python
+raise self.Cancel("Code snippet did not compile")
+```
+Messages logged here will be visible on the job detail page.
+
 ### get_config_form()
 
 The `get_config_form()` method can optionally be implemented to return a [WTForms](https://wtforms.readthedocs.io/) form class that the user can use to configure the enrichment.
