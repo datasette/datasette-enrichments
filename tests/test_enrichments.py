@@ -609,3 +609,15 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
             "message": "cancelled: cancel message",
         },
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    parse(version.__version__) < parse("1.0a13"),
+    reason="uses datasette.Permission",
+)
+async def test_permission_registered(datasette):
+    permission = datasette.get_permission("enrichments")
+    assert permission.name == "enrichments"
+    assert permission.takes_database
+    assert not permission.takes_resource

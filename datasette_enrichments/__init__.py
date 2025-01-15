@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 import asyncio
 import datetime
 from datasette import hookimpl
+
+try:
+    from datasette import Permission
+except ImportError:
+    Permission = None
 from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
 from datasette_secrets import Secret, get_secret
 import json
@@ -1028,3 +1033,18 @@ def extra_body_script(datasette, database, table, view_name):
         }
 
     return inner
+
+
+@hookimpl
+def register_permissions(datasette):
+    if Permission is not None:
+        return [
+            Permission(
+                name="enrichments",
+                abbr=None,
+                description="Enrich data in tables",
+                takes_database=True,
+                takes_resource=False,
+                default=False,
+            )
+        ]
