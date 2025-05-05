@@ -961,7 +961,10 @@ async def _restart_running_jobs_task(datasette):
 
         # If the _enrichment_jobs table doesn't exist in this DB, skip
         table_names = await db.table_names()
-        if "_enrichment_jobs" not in table_names:
+        if (
+            "_enrichment_jobs" not in table_names
+            or "_enrichment_progress" not in table_names
+        ):
             continue
 
         # Find jobs marked as 'running'
