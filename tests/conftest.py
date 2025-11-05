@@ -48,6 +48,7 @@ def load_uppercase_plugin():
             pks: List[str],
             config: dict,
             job_id: int,
+            actor_id: str = None,
         ):
             if getattr(datasette, "_trigger_enrich_batch_error", None):
                 raise Exception("Error in enrich_batch()")
@@ -90,6 +91,7 @@ def load_uppercase_plugin():
             pks: List[str],
             config: dict,
             job_id: int,
+            actor_id: str = None,
         ):
             secret = await self.get_secret(datasette, config)
             for row in rows:
@@ -119,6 +121,7 @@ def load_uppercase_plugin():
             table: str,
             rows: List[dict],
             pks: List[str],
+            actor_id: str = None,
         ):
             for row in rows:
                 to_hash = json.dumps(row, default=repr)
@@ -144,6 +147,7 @@ def load_uppercase_plugin():
             rows: List[dict],
             pks: List[str],
             job_id: int,
+            actor_id: str = None,
         ) -> int:
             assert len(pks) == 1
             pk = pks[0]
@@ -174,6 +178,7 @@ def load_uppercase_plugin():
             table: str,
             rows: List[dict],
             pks: List[str],
+            actor_id: str = None,
         ):
             row = rows[0]
             result = await datasette.enrichment_queue.get()

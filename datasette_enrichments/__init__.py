@@ -327,6 +327,7 @@ class Enrichment(ABC):
         pks: list,
         config: dict,
         job_id: int,
+        actor_id: str = None,
     ) -> Optional[int]:
         raise NotImplementedError
 
@@ -453,6 +454,7 @@ class Enrichment(ABC):
                         pks=pks or ["rowid"],
                         config=json.loads(job["config"]),
                         job_id=job_id,
+                        actor_id=job["actor_id"],
                     )
                     if success_count is None:
                         success_count = len(rows)

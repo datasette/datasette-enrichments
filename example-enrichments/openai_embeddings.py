@@ -92,6 +92,7 @@ class Embeddings(Enrichment):
         pks: List[str],
         config: dict,
         job_id: int,
+        actor_id: str = None,
     ):
         template = SpaceTemplate(config["template"])
         texts = [template.safe_substitute(row) for row in rows]

@@ -56,6 +56,7 @@ class JinjaSandbox(Enrichment):
         pks: List[str],
         config: dict,
         job_id: int,
+        actor_id: str = None,
     ):
         env = SandboxedEnvironment(enable_async=True)
         template = env.from_string(config["template"])
