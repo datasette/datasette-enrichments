@@ -2,11 +2,8 @@ from abc import ABC, abstractmethod
 import asyncio
 import datetime
 from datasette import hookimpl
-
-try:
-    from datasette import Permission
-except ImportError:
-    Permission = None
+from datasette.permissions import Action, PermissionSQL
+from datasette.resources import DatabaseResource
 from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
 from datasette_secrets import Secret, get_secret
 import json
@@ -20,7 +17,7 @@ from markupsafe import Markup, escape
 from . import views
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
-from .utils import get_with_auth, mark_job_complete, pks_for_rows
+from .utils import mark_job_complete, pks_for_rows
 from urllib.parse import quote
 from . import hookspecs
 
@@ -359,7 +356,9 @@ class Enrichment(ABC):
         qs += "_size=0&_extra=count"
         table_path = datasette.urls.table(db.name, table)
 
-        response = await get_with_auth(datasette, table_path + ".json" + "?" + qs)
+        response = await datasette.client.get(
+            table_path + ".json" + "?" + qs, skip_permission_checks=True
+        )
         filtered_data = response.json()
         if "count" in filtered_data:
             row_count = filtered_data["count"]
@@ -438,7 +437,9 @@ class Enrichment(ABC):
                 if next_cursor:
                     qs += "&_next={}".format(next_cursor)
                 qs += "&_size={}&_shape=objects".format(self.batch_size)
-                response = await get_with_auth(datasette, table_path + "?" + qs)
+                response = await datasette.client.get(
+                    table_path + "?" + qs, skip_permission_checks=True
+                )
                 rows = response.json()["rows"]
                 if not rows:
                     break
@@ -540,8 +541,10 @@ def register_routes():
 @hookimpl
 def table_actions(datasette, actor, database, table, request):
     async def inner():
-        if await datasette.permission_allowed(
-            actor, "enrichments", resource=database, default=False
+        if await datasette.allowed(
+            action="enrichments",
+            actor=actor,
+            resource=DatabaseResource(database),
         ):
             items = [
                 {
@@ -593,8 +596,10 @@ def table_actions(datasette, actor, database, table, request):
 @hookimpl
 def database_actions(datasette, actor, database):
     async def inner():
-        if await datasette.permission_allowed(
-            actor, "enrichments", resource=database, default=False
+        if await datasette.allowed(
+            action="enrichments",
+            actor=actor,
+            resource=DatabaseResource(database),
         ):
             # Are there any runs?
             try:
@@ -626,8 +631,10 @@ def database_actions(datasette, actor, database):
 @hookimpl
 def row_actions(datasette, database, table, actor, row):
     async def inner():
-        if await datasette.permission_allowed(
-            actor, "enrichments", resource=database, default=False
+        if await datasette.allowed(
+            action="enrichments",
+            actor=actor,
+            resource=DatabaseResource(database),
         ):
             # query_string to select row based on its primary keys
             db = datasette.get_database(database)
@@ -657,26 +664,6 @@ def row_actions(datasette, database, table, actor, row):
             ]
 
     return inner
-
-
-@hookimpl
-def permission_allowed(actor, action):
-    # Special actor used for internal datasette.client.get() calls
-    if actor == {"_datasette_enrichments": True}:
-        return True
-    # Root user can always use enrichments
-    if action == "enrichments" and actor and actor.get("id") == "root":
-        return True
-
-
-@hookimpl(tryfirst=True)
-def actor_from_request(datasette, request):
-    secret_token = request.headers.get("x-datasette-enrichments") or ""
-    expected_token = getattr(datasette, "_secret_enrichments_token", None)
-    if expected_token and secrets.compare_digest(
-        secret_token, datasette._secret_enrichments_token
-    ):
-        return {"_datasette_enrichments": True}
 
 
 async def jobs_for_table(datasette, database_name, table_name):
@@ -1041,15 +1028,11 @@ def extra_body_script(datasette, database, table, view_name):
 
 
 @hookimpl
-def register_permissions(datasette):
-    if Permission is not None:
-        return [
-            Permission(
-                name="enrichments",
-                abbr=None,
-                description="Enrich data in tables",
-                takes_database=True,
-                takes_resource=False,
-                default=False,
-            )
-        ]
+def register_actions(datasette):
+    return [
+        Action(
+            name="enrichments",
+            description="Enrich data in tables",
+            resource_class=DatabaseResource,
+        )
+    ]
