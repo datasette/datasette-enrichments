@@ -114,7 +114,7 @@ The parameters available to `enrich_batch()` are as follows:
 - `pks` is a list of primary key column names for the table.
 - `config` is a dictionary of configuration options that the user set for the enrichment, using the configuration form (if one was provided).
 - `job_id` is a unique integer ID for the current job. This can be used to log additional information about the enrichment execution.
-- `actor_id` is the ID of the actor (user) who initiated the enrichment, or `None` if no actor was authenticated. This can be used to implement per-actor budget checks or other access control logic.
+- `actor_id` is the ID of the actor (user) who initiated the enrichment, or `None` if no actor was authenticated. This can be used to implement per-actor budget checks.
 
 Your method can optionally return an integer count of the number of rows that were successfully processed. You should do this if you are using the `.log_error()` method described below to track errors - that way the progress bar will be updated with the correct number of rows processed.
 
