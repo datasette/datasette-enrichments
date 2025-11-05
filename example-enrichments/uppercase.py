@@ -34,6 +34,7 @@ class Uppercase(Enrichment):
         pks: List[str],
         config: dict,
         job_id: int,
+        actor_id: str = None,
     ):
         columns = config.get("columns") or []
         if not columns:
