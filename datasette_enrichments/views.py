@@ -8,12 +8,17 @@ from datasette.utils import (
 import json
 from .utils import get_with_auth
 import urllib.parse
+from datasette.resources import DatabaseResource
+from .actions import ENRICHMENTS_ACTION
 
 
 async def check_permissions(datasette, request, database):
-    if not await datasette.permission_allowed(
-        request.actor, "enrichments", resource=database, default=False
-    ):
+    if not await datasette.allowed(
+            action=ENRICHMENTS_ACTION.name,
+            actor=request.actor,
+            resource=DatabaseResource(database),
+        ):
+        print(database, request.actor)
         raise Forbidden("Permission denied for enrichments")
 
 

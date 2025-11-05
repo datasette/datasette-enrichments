@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 import asyncio
 import datetime
 from datasette import hookimpl
+from datasette.resources import DatabaseResource
+from .actions import ENRICHMENTS_ACTION
 
 try:
     from datasette import Permission
@@ -34,6 +36,11 @@ if TYPE_CHECKING:
 
 pm.add_hookspecs(hookspecs)
 
+@hookimpl
+def register_actions(datasette):
+    return [
+        ENRICHMENTS_ACTION,
+    ]
 
 IdType = Union[int, str, Tuple[Union[int, str], ...]]
 
@@ -538,8 +545,10 @@ def register_routes():
 @hookimpl
 def table_actions(datasette, actor, database, table, request):
     async def inner():
-        if await datasette.permission_allowed(
-            actor, "enrichments", resource=database, default=False
+        if await datasette.allowed(
+            action=ENRICHMENTS_ACTION.name,
+            actor=actor,
+            resource=DatabaseResource(database),
         ):
             items = [
                 {
@@ -591,8 +600,10 @@ def table_actions(datasette, actor, database, table, request):
 @hookimpl
 def database_actions(datasette, actor, database):
     async def inner():
-        if await datasette.permission_allowed(
-            actor, "enrichments", resource=database, default=False
+        if await datasette.allowed(
+            action=ENRICHMENTS_ACTION.name,
+            actor=actor,
+            resource=DatabaseResource(database),
         ):
             # Are there any runs?
             try:
