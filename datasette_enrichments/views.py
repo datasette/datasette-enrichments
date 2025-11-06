@@ -1,4 +1,5 @@
 from datasette import Response, NotFound, Forbidden
+from datasette.resources import DatabaseResource
 from datasette.utils import (
     async_call_with_supported_arguments,
     path_with_removed_args,
@@ -6,13 +7,14 @@ from datasette.utils import (
     tilde_decode,
 )
 import json
-from .utils import get_with_auth
 import urllib.parse
 
 
 async def check_permissions(datasette, request, database):
-    if not await datasette.permission_allowed(
-        request.actor, "enrichments", resource=database, default=False
+    if not await datasette.allowed(
+        action="enrichments",
+        actor=request.actor,
+        resource=DatabaseResource(database),
     ):
         raise Forbidden("Permission denied for enrichments")
 
@@ -145,9 +147,9 @@ async def enrichment_view(datasette, request):
     # re-encode
     query_string = urllib.parse.urlencode(bits)
     filtered_data = (
-        await get_with_auth(
-            datasette,
+        await datasette.client.get(
             datasette.urls.table(database, table, "json") + "?" + query_string,
+            skip_permission_checks=True,
         )
     ).json()
     if "count" not in filtered_data:
@@ -207,7 +209,7 @@ async def enrichment_picker(datasette, request):
     # re-encode
     query_string = urllib.parse.urlencode(bits)
     url = datasette.urls.table(database, table, "json") + "?" + query_string
-    response = await get_with_auth(datasette, url)
+    response = await datasette.client.get(url, skip_permission_checks=True)
     if response.status_code != 200:
         return Response.text(
             "Error fetching data from {}: {}".format(url, response.text),

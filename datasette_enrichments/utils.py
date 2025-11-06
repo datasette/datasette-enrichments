@@ -6,15 +6,6 @@ if TYPE_CHECKING:
     from datasette.app import Datasette
 
 
-async def get_with_auth(datasette, *args, **kwargs):
-    if not hasattr(datasette, "_secret_enrichments_token"):
-        datasette._secret_enrichments_token = secrets.token_hex(16)
-    headers = kwargs.pop("headers", None) or {}
-    headers["x-datasette-enrichments"] = datasette._secret_enrichments_token
-    kwargs["headers"] = headers
-    return await datasette.client.get(*args, **kwargs)
-
-
 class WaitForJobException(Exception):
     def __init__(self, job_id, msg):
         self.job_id = job_id

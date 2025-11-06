@@ -36,14 +36,15 @@ async def datasette(tmpdir):
 
     datasette = Datasette(
         [data],
-        metadata={
+        config={
             "databases": {
                 # Lock down permissions to test
                 # https://github.com/datasette/datasette-enrichments/issues/13
                 "data": {"allow": {"id": "root"}}
-            }
+            },
         },
     )
+    datasette.root_enabled = True
     datasette._test_db = db
     await datasette.invoke_startup()
     return datasette
@@ -616,8 +617,7 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
     parse(version.__version__) < parse("1.0a13"),
     reason="uses datasette.Permission",
 )
-async def test_permission_registered(datasette):
-    permission = datasette.get_permission("enrichments")
-    assert permission.name == "enrichments"
-    assert permission.takes_database
-    assert not permission.takes_resource
+async def test_action_registered(datasette):
+    action = datasette.actions.get("enrichments")
+    assert action.name == "enrichments"
+    assert action.resource_class.__name__ == "DatabaseResource"
