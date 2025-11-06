@@ -1,0 +1,47 @@
+[project]
+name = "datasette-enrichments"
+version = "0.6a0"
+description = "Tools for running enrichments against data stored in Datasette"
+readme = "README.md"
+authors = [{name = "Simon Willison"}]
+license = "Apache-2.0"
+classifiers = [
+    "Framework :: Datasette"
+]
+requires-python = ">=3.10"
+dependencies = [
+    "datasette>=1.0a21",
+    "WTForms",
+    "datasette-secrets>=0.2"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/simonw/datasette-enrichments"
+Changelog = "https://github.com/simonw/datasette-enrichments/releases"
+Issues = "https://github.com/simonw/datasette-enrichments/issues"
+CI = "https://github.com/simonw/datasette-enrichments/actions"
+
+[project.entry-points.datasette]
+enrichments = "datasette_enrichments"
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio", "black", "ruff", "packaging"]
+docs = [
+    "sphinx==7.2.6",
+    "furo==2023.9.10",
+    "sphinx-autobuild",
+    "sphinx-copybutton",
+    "myst-parser",
+    "cogapp"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["datasette_enrichments"]
+
+[tool.setuptools.package-data]
+datasette_enrichments = ["templates/*"]
