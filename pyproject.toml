@@ -15,6 +15,9 @@ dependencies = [
     "datasette-secrets>=0.2"
 ]
 
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "black", "ruff", "packaging"]
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
@@ -29,7 +32,6 @@ CI = "https://github.com/simonw/datasette-enrichments/actions"
 enrichments = "datasette_enrichments"
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-asyncio", "black", "ruff", "packaging"]
 docs = [
     "sphinx==7.2.6",
     "furo==2023.9.10",
