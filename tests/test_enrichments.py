@@ -1,8 +1,10 @@
 import asyncio
 import html
+import inspect
 import random
 import re
 import sqlite3
+import time
 
 import pytest
 import pytest_asyncio
@@ -106,23 +108,14 @@ async def test_uppercase_plugin(datasette, is_root, table):
     assert table_name == table
     assert config == '{"columns": "s"}'
     # Wait a moment and it should start running
-    tries = 0
-    ok = False
-    while tries < 10:
-        await asyncio.sleep(0.1)
-        tries += 1
-        status = datasette._test_db.execute(
-            "select status from _enrichment_jobs"
-        ).fetchall()[0][0]
-        if status == "running":
-            ok = True
-            break
-
-    assert ok, "Enrichment did not start running"
+    await wait_until(
+        lambda: get_status(datasette, job_id) == "running",
+        "enrichment to start running",
+    )
     assert hasattr(datasette, "_initialize_called_with")
     assert not hasattr(datasette, "_finalize_called_with")
 
-    await wait_for_job(datasette, job_id, database_name, timeout=1)
+    await wait_for_job(datasette, job_id, database_name, timeout=5)
     assert hasattr(datasette, "_finalize_called_with"), "Enrichment did not complete"
 
 
@@ -138,7 +131,7 @@ async def test_error_log(datasette):
     assert response.status_code == 302
     job_id = response.headers["location"].split("=")[-1]
     # Wait for it to finish, should populate error table
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
     errors = datasette._test_db.execute(
         "select job_id, row_pks, error from _enrichment_errors"
     ).fetchall()
@@ -233,7 +226,7 @@ async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
     job_id = response3.headers["location"].split("=")[-1]
 
     # Wait for it to finish and check it worked
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
     # Check for errors
     job_details = datasette._test_db.execute(
         "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
@@ -271,7 +264,7 @@ async def test_enrichment_with_no_config_form(datasette):
     job_id = response3.headers["location"].split("=")[-1]
 
     # Wait for it to finish and check it worked
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
 
     job_details = datasette._test_db.execute(
         "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
@@ -303,7 +296,7 @@ async def test_enrichment_with_errors(datasette):
     job_id = response2.headers["location"].split("=")[-1]
 
     # Wait for it to finish and check it worked
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
 
     # Check for errors
     errors = datasette._test_db.execute(
@@ -384,7 +377,7 @@ async def test_enrichments_start_on_startup(datasette):
     )
     # First request to the app should cause that to finish
     await datasette.client.get("/")
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
     # Check that the enrichment is now complete
     row = dict(
         (
@@ -399,6 +392,37 @@ def get_status(datasette, job_id):
     return datasette._test_db.execute(
         "select status from _enrichment_jobs where id = ?", (job_id,)
     ).fetchone()[0]
+
+
+def get_progress_rows(datasette, job_id):
+    cursor = datasette._test_db.cursor()
+    cursor.row_factory = sqlite3.Row
+    return [
+        dict(row)
+        for row in cursor.execute(
+            """
+            select job_id, success_count, error_count, message
+            from _enrichment_progress where job_id = ? order by id
+            """,
+            (job_id,),
+        )
+    ]
+
+
+async def wait_until(condition, description, timeout=5):
+    "Poll condition (sync or async callable) until it returns truthy"
+    deadline = time.monotonic() + timeout
+    while True:
+        result = condition()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"Timed out after {timeout}s waiting for {description}"
+            )
+        await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -423,9 +447,15 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
     for i in range(3):
         await queue.put(str(i))
 
-    await asyncio.sleep(0.1)
+    async def three_rows_done():
+        response = await datasette.client.get(
+            f"/-/enrichment-jobs/data/{job_id}", cookies=cookies
+        )
+        return response.json()["sections"] == [{"type": "success", "count": 3}]
 
-    # Call the API and check that 10 are done
+    await wait_until(three_rows_done, "3 rows to be processed")
+
+    # Call the API and check that 3 are done
     response3 = await datasette.client.get(
         f"/-/enrichment-jobs/data/{job_id}", cookies=cookies
     )
@@ -465,18 +495,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
     assert get_status(datasette, job_id) == "cancelled"
 
     # Check the messages were correctly logged
-    cursor = datasette._test_db.cursor()
-    cursor.row_factory = sqlite3.Row
-    rows = [
-        dict(row)
-        for row in cursor.execute(
-            """
-            select job_id, success_count, error_count, message
-            from _enrichment_progress where job_id = ? order by id
-            """,
-            (job_id,),
-        )
-    ]
+    rows = get_progress_rows(datasette, job_id)
     assert rows == [
         {
             "job_id": job_id,
@@ -529,7 +548,9 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
     job_id = int(response2.headers["location"].split("=")[-1])
 
     assert get_status(datasette, job_id) == "pending"
-    await asyncio.sleep(0.1)
+    await wait_until(
+        lambda: get_status(datasette, job_id) != "pending", "job to leave pending"
+    )
     assert get_status(datasette, job_id) == "running"
 
     # Now feed it three results and then pause then cancel
@@ -537,7 +558,12 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
     for i in range(3):
         await queue.put(str(i))
     await queue.put("pause")
-    await asyncio.sleep(0.1)
+    # The status is updated before the progress row is written, so wait for
+    # both: resuming too early would record "running" before "paused"
+    await wait_until(
+        lambda: len(get_progress_rows(datasette, job_id)) == 4,
+        "3 rows and the pause to be recorded",
+    )
     assert get_status(datasette, job_id) == "paused"
 
     # Resume it again
@@ -549,21 +575,13 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
 
     # Now cancel it
     await queue.put("cancel")
-    await asyncio.sleep(0.1)
+    await wait_until(
+        lambda: len(get_progress_rows(datasette, job_id)) == 6,
+        "the cancellation to be recorded",
+    )
     assert get_status(datasette, job_id) == "cancelled"
 
-    cursor = datasette._test_db.cursor()
-    cursor.row_factory = sqlite3.Row
-    rows = [
-        dict(row)
-        for row in cursor.execute(
-            """
-            select job_id, success_count, error_count, message
-            from _enrichment_progress where job_id = ? order by id
-            """,
-            (job_id,),
-        )
-    ]
+    rows = get_progress_rows(datasette, job_id)
     assert rows == [
         {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
         {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
