@@ -1,13 +1,13 @@
 import asyncio
-from datasette.database import Database
 import hashlib
 import json
-from typing import List
-from wtforms import Form, SelectField, StringField
-from wtforms.widgets import ListWidget, CheckboxInput
+
 import pytest
-from datasette.plugins import pm
 from datasette import hookimpl
+from datasette.database import Database
+from datasette.plugins import pm
+from wtforms import Form, SelectField, StringField
+from wtforms.widgets import CheckboxInput, ListWidget
 
 
 class MultiCheckboxField(SelectField):
@@ -17,8 +17,9 @@ class MultiCheckboxField(SelectField):
 
 @pytest.fixture(autouse=True)
 def load_uppercase_plugin():
-    from datasette_enrichments import Enrichment
     from datasette_secrets import Secret
+
+    from datasette_enrichments import Enrichment
 
     class UppercaseDemo(Enrichment):
         name = "Convert to uppercase"
@@ -44,22 +45,22 @@ def load_uppercase_plugin():
             datasette,
             db: Database,
             table: str,
-            rows: List[dict],
-            pks: List[str],
+            rows: list[dict],
+            pks: list[str],
             config: dict,
             job_id: int,
-            actor_id: str = None,
+            actor_id: str | None = None,
         ):
             if getattr(datasette, "_trigger_enrich_batch_error", None):
-                raise Exception("Error in enrich_batch()")
+                raise Exception("Error in enrich_batch()")  # noqa: TRY002
             columns = config.get("columns") or []
             if not columns:
                 return
-            wheres = " and ".join('"{}" = ?'.format(pk) for pk in pks)
-            sets = ", ".join('"{}" = upper("{}")'.format(col, col) for col in columns)
+            wheres = " and ".join(f'"{pk}" = ?' for pk in pks)
+            sets = ", ".join(f'"{col}" = upper("{col}")' for col in columns)
             params = [[row[pk] for pk in pks] for row in rows]
             await db.execute_write_many(
-                "update [{}] set {} where {}".format(table, sets, wheres), params
+                f"update [{table}] set {sets} where {wheres}", params
             )
             # Wait 0.3s
             await asyncio.sleep(0.3)
@@ -87,11 +88,11 @@ def load_uppercase_plugin():
             datasette,
             db: Database,
             table: str,
-            rows: List[dict],
-            pks: List[str],
+            rows: list[dict],
+            pks: list[str],
             config: dict,
             job_id: int,
-            actor_id: str = None,
+            actor_id: str | None = None,
         ):
             secret = await self.get_secret(datasette, config)
             for row in rows:
@@ -99,7 +100,7 @@ def load_uppercase_plugin():
                     "update [{}] set [{}] = ? where {}".format(
                         table,
                         config["column"],
-                        " and ".join('"{}" = ?'.format(pk) for pk in pks),
+                        " and ".join(f'"{pk}" = ?' for pk in pks),
                     ),
                     [row[config["column"]].replace(config["string"], secret)]
                     + [row[pk] for pk in pks],
@@ -111,17 +112,15 @@ def load_uppercase_plugin():
         description = "To demonstrate an enrichment with no config form"
 
         async def initialize(self, datasette, db, table, config):
-            await db.execute_write(
-                "alter table [{}] add column sha_256 text".format(table)
-            )
+            await db.execute_write(f"alter table [{table}] add column sha_256 text")
 
         async def enrich_batch(
             self,
             db: Database,
             table: str,
-            rows: List[dict],
-            pks: List[str],
-            actor_id: str = None,
+            rows: list[dict],
+            pks: list[str],
+            actor_id: str | None = None,
         ):
             for row in rows:
                 to_hash = json.dumps(row, default=repr)
@@ -129,7 +128,7 @@ def load_uppercase_plugin():
                 await db.execute_write(
                     "update [{}] set sha_256 = ? where {}".format(
                         table,
-                        " and ".join('"{}" = ?'.format(pk) for pk in pks),
+                        " and ".join(f'"{pk}" = ?' for pk in pks),
                     ),
                     [sha_256] + [row[pk] for pk in pks],
                 )
@@ -144,10 +143,10 @@ def load_uppercase_plugin():
             self,
             db: Database,
             table: str,
-            rows: List[dict],
-            pks: List[str],
+            rows: list[dict],
+            pks: list[str],
             job_id: int,
-            actor_id: str = None,
+            actor_id: str | None = None,
         ) -> int:
             assert len(pks) == 1
             pk = pks[0]
@@ -176,9 +175,9 @@ def load_uppercase_plugin():
             datasette,
             db: Database,
             table: str,
-            rows: List[dict],
-            pks: List[str],
-            actor_id: str = None,
+            rows: list[dict],
+            pks: list[str],
+            actor_id: str | None = None,
         ):
             row = rows[0]
             result = await datasette.enrichment_queue.get()

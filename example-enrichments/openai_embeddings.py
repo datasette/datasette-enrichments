@@ -1,15 +1,14 @@
-from datasette_enrichments import Enrichment
-from datasette.database import Database
-from typing import List
 import math
 import struct
 from string import Template
+
 import httpx
-
-
-from wtforms import SelectField, Form, TextAreaField, PasswordField
-from wtforms.widgets import ListWidget, CheckboxInput
+from datasette.database import Database
+from wtforms import Form, PasswordField, SelectField, TextAreaField
 from wtforms.validators import DataRequired
+from wtforms.widgets import CheckboxInput, ListWidget
+
+from datasette_enrichments import Enrichment
 
 
 class MultiCheckboxField(SelectField):
@@ -38,7 +37,7 @@ class Embeddings(Enrichment):
         choices = [(col, col) for col in await db.table_columns(table)]
 
         # Default template uses all string columns
-        default = " ".join("${{{}}}".format(col[0]) for col in choices)
+        default = " ".join(f"${{{col[0]}}}" for col in choices)
 
         class ConfigForm(Form):
             template = TextAreaField(
@@ -55,29 +54,25 @@ class Embeddings(Enrichment):
 
     async def initialize(self, datasette, db, table, config):
         # Ensure table exists
-        embeddings_table = "_embeddings_{}".format(table)
+        embeddings_table = f"_embeddings_{table}"
         if not await db.table_exists(embeddings_table):
             # Create it
             pk_names = await db.primary_keys(table)
             column_types = {
                 c.name: c.type for c in await db.table_column_details(table)
             }
-            sql = ["create table [{}] (".format(embeddings_table)]
+            sql = [f"create table [{embeddings_table}] ("]
             create_bits = []
             for pk in pk_names:
-                create_bits.append("    [{}] {}".format(pk, column_types[pk]))
+                create_bits.append(f"    [{pk}] {column_types[pk]}")
             create_bits.append("    _embedding blob")
             create_bits.append(
-                "    PRIMARY KEY ({})".format(
-                    ", ".join("[{}]".format(pk) for pk in pk_names)
-                )
+                "    PRIMARY KEY ({})".format(", ".join(f"[{pk}]" for pk in pk_names))
             )
             # If there's only one primary key, set up a foreign key constraint
             if len(pk_names) == 1:
                 create_bits.append(
-                    "    FOREIGN KEY ([{}]) REFERENCES [{}] ({})".format(
-                        pk_names[0], table, pk_names[0]
-                    )
+                    f"    FOREIGN KEY ([{pk_names[0]}]) REFERENCES [{table}] ({pk_names[0]})"
                 )
             sql.append(",\n".join(create_bits))
             sql.append(")")
@@ -88,11 +83,11 @@ class Embeddings(Enrichment):
         datasette,
         db: Database,
         table: str,
-        rows: List[dict],
-        pks: List[str],
+        rows: list[dict],
+        pks: list[str],
         config: dict,
         job_id: int,
-        actor_id: str = None,
+        actor_id: str | None = None,
     ):
         template = SpaceTemplate(config["template"])
         texts = [template.safe_substitute(row) for row in rows]
@@ -122,7 +117,7 @@ class Embeddings(Enrichment):
         total_cost_rounded_up = math.ceil(total_cost_in_100ths_of_cents)
         await self.increment_cost(db, job_id, total_cost_rounded_up)
 
-        embeddings_table = "_embeddings_{}".format(table)
+        embeddings_table = f"_embeddings_{table}"
         # Write results to the table
         for row, result in zip(rows, results):
             vector = result["embedding"]
@@ -130,8 +125,8 @@ class Embeddings(Enrichment):
             await db.execute_write(
                 "insert or replace into [{embeddings_table}] ({pks}, _embedding) values ({pk_question_marks}, ?)".format(
                     embeddings_table=embeddings_table,
-                    pks=", ".join("[{}]".format(pk) for pk in pks),
+                    pks=", ".join(f"[{pk}]" for pk in pks),
                     pk_question_marks=", ".join("?" for _ in pks),
                 ),
-                list(row[pk] for pk in pks) + [embedding],
+                [row[pk] for pk in pks] + [embedding],
             )

@@ -1,7 +1,7 @@
 from datasette import hookimpl
-from uppercase import Uppercase
-from openai_embeddings import Embeddings
 from jinja_sandbox import JinjaSandbox
+from openai_embeddings import Embeddings
+from uppercase import Uppercase
 
 
 @hookimpl

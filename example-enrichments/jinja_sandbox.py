@@ -1,12 +1,10 @@
-from datasette_enrichments import Enrichment
-
-from jinja2.sandbox import SandboxedEnvironment
-
+import sqlite_utils
 from datasette.database import Database
-from typing import List
+from jinja2.sandbox import SandboxedEnvironment
 from wtforms import Form, StringField, TextAreaField
 from wtforms.validators import DataRequired
-import sqlite_utils
+
+from datasette_enrichments import Enrichment
 
 
 class JinjaSandbox(Enrichment):
@@ -52,11 +50,11 @@ class JinjaSandbox(Enrichment):
         datasette,
         db: Database,
         table: str,
-        rows: List[dict],
-        pks: List[str],
+        rows: list[dict],
+        pks: list[str],
         config: dict,
         job_id: int,
-        actor_id: str = None,
+        actor_id: str | None = None,
     ):
         env = SandboxedEnvironment(enable_async=True)
         template = env.from_string(config["template"])
@@ -67,7 +65,7 @@ class JinjaSandbox(Enrichment):
                 "update [{table}] set [{output_column}] = ? where {wheres}".format(
                     table=table,
                     output_column=output_column,
-                    wheres=" and ".join('"{}" = ?'.format(pk) for pk in pks),
+                    wheres=" and ".join(f'"{pk}" = ?' for pk in pks),
                 ),
-                [output] + list(row[pk] for pk in pks),
+                [output] + [row[pk] for pk in pks],
             )

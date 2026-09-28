@@ -1,29 +1,32 @@
-from abc import ABC, abstractmethod
 import asyncio
 import datetime
-from datasette import hookimpl
-from datasette.permissions import Action, PermissionSQL
-from datasette.resources import DatabaseResource
-from datasette.utils import async_call_with_supported_arguments, tilde_encode, sqlite3
-from datasette_secrets import Secret, get_secret
 import json
 import secrets
 import sys
 import time
 import traceback
 import urllib
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+from urllib.parse import quote
+
+from datasette import hookimpl
+from datasette.permissions import Action
 from datasette.plugins import pm
+from datasette.resources import DatabaseResource
+from datasette.utils import (
+    async_call_with_supported_arguments,
+    await_me_maybe,
+    sqlite3,
+    tilde_encode,
+)
+from datasette_secrets import Secret, get_secret
 from markupsafe import Markup, escape
-from . import views
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
+
+from . import hookspecs, views
 from .utils import mark_job_complete, pks_for_rows
-from urllib.parse import quote
-from . import hookspecs
-
-from datasette.utils import await_me_maybe
-
-from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
@@ -32,10 +35,10 @@ if TYPE_CHECKING:
 pm.add_hookspecs(hookspecs)
 
 
-IdType = Union[int, str, Tuple[Union[int, str], ...]]
+IdType = int | str | tuple[int | str, ...]
 
 # Custom epoch to save space in the _enrichment_progress table
-JAN_1_2025_EPOCH = int(datetime.datetime(2025, 1, 1).timestamp() * 1000)
+JAN_1_2025_EPOCH = int(datetime.datetime(2025, 1, 1).timestamp() * 1000)  # noqa: DTZ001
 
 
 def ms_since_2025_to_datetime(ms_since_2025):
@@ -105,8 +108,8 @@ async def set_job_status(
     db: "Database",
     job_id: int,
     status: str,
-    allowed_statuses: Optional[Tuple[str]] = None,
-    message: Optional[str] = None,
+    allowed_statuses: tuple[str] | None = None,
+    message: str | None = None,
 ):
     if allowed_statuses:
         # First check the current status
@@ -146,9 +149,7 @@ async def record_progress(db, job_id, success_count, error_count, message=""):
         ) values (
             :job_id, :timestamp_ms_2025, :success_count, :error_count, {}
         )
-    """.format(
-            ":message" if message else "null"
-        ),
+    """.format(":message" if message else "null"),
         {
             "job_id": job_id,
             "timestamp_ms_2025": int(time.time() * 1000) - JAN_1_2025_EPOCH,
@@ -173,7 +174,7 @@ class SecretError(Exception):
 
 
 class Enrichment(ABC):
-    _subclasses = []
+    _subclasses = []  # noqa: RUF012
 
     batch_size: int = 100
     # Cancel run after this many errors
@@ -181,14 +182,14 @@ class Enrichment(ABC):
     log_traceback: bool = False
 
     class Cancel(Exception):
-        def __init__(self, reason: Optional[str] = None):
+        def __init__(self, reason: str | None = None):
             self.reason = reason
 
         def __str__(self) -> str:
             return self.reason or "Cancelled by enrichment"
 
     class Pause(Exception):
-        def __init__(self, reason: Optional[str] = None):
+        def __init__(self, reason: str | None = None):
             self.reason = reason
 
         def __str__(self) -> str:
@@ -207,14 +208,14 @@ class Enrichment(ABC):
         ...
 
     description: str = ""  # Short description of this enrichment
-    secret: Optional[Secret] = None
+    secret: Secret | None = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls._subclasses.append(cls)
 
     def __repr__(self):
-        return "<Enrichment: {}>".format(self.slug)
+        return f"<Enrichment: {self.slug}>"
 
     async def get_secret(self, datasette: "Datasette", config: dict):
         if self.secret is None:
@@ -228,13 +229,11 @@ class Enrichment(ABC):
         stashed_keys = datasette._enrichments_stashed_secrets
         stash_key = config.get("enrichment_secret")
         if stash_key not in stashed_keys:
-            raise SecretError(
-                "No secret found in stash for {}".format(self.secret.name)
-            )
+            raise SecretError(f"No secret found in stash for {self.secret.name}")
         return stashed_keys[stash_key]
 
     async def log_error(
-        self, db: "Database", job_id: int, ids: List[IdType], error: str
+        self, db: "Database", job_id: int, ids: list[IdType], error: str
     ):
         if self.log_traceback:
             error += "\n\n" + traceback.format_exc()
@@ -324,8 +323,8 @@ class Enrichment(ABC):
         pks: list,
         config: dict,
         job_id: int,
-        actor_id: str = None,
-    ) -> Optional[int]:
+        actor_id: str | None = None,
+    ) -> int | None:
         raise NotImplementedError
 
     async def increment_cost(
@@ -347,7 +346,7 @@ class Enrichment(ABC):
         table: str,
         filter_querystring: str,
         config: dict,
-        actor_id: str = None,
+        actor_id: str | None = None,
     ) -> int:
         # Enqueue a job
         qs = filter_querystring
@@ -378,9 +377,7 @@ class Enrichment(ABC):
                         :enrichment, 'pending', :database_name, :table_name, :filter_querystring, :config,
                         datetime('now'), :row_count, 0, 0, 0{}
                     )
-                """.format(
-                        ", :actor_id" if actor_id else ", null"
-                    ),
+                """.format(", :actor_id" if actor_id else ", null"),
                     {
                         "enrichment": self.slug,
                         "database_name": db.name,
@@ -435,8 +432,8 @@ class Enrichment(ABC):
                 )
                 qs = job["filter_querystring"]
                 if next_cursor:
-                    qs += "&_next={}".format(next_cursor)
-                qs += "&_size={}&_shape=objects".format(self.batch_size)
+                    qs += f"&_next={next_cursor}"
+                qs += f"&_size={self.batch_size}&_shape=objects"
                 response = await datasette.client.get(
                     table_path + "?" + qs, skip_permission_checks=True
                 )
@@ -466,7 +463,7 @@ class Enrichment(ABC):
                 except self.Pause as ex:
                     await set_job_status(db, job_id, "paused", message=str(ex))
                     return
-                except Exception as ex:
+                except Exception as ex:  # noqa: BLE001
                     await self.log_error(db, job_id, pks_for_rows(rows, pks), str(ex))
                 # Update next_cursor
                 next_cursor = response.json()["next"]
@@ -553,7 +550,7 @@ def table_actions(datasette, actor, database, table, request):
                             database,
                             tilde_encode(table),
                             (
-                                "?{}".format(request.query_string)
+                                f"?{request.query_string}"
                                 if request.query_string
                                 else ""
                             ),
@@ -575,9 +572,7 @@ def table_actions(datasette, actor, database, table, request):
                     items.append(
                         {
                             "href": datasette.urls.path(
-                                "/-/enrich/{}/-/jobs?table={}".format(
-                                    database, quote(table)
-                                ),
+                                f"/-/enrich/{database}/-/jobs?table={quote(table)}",
                             ),
                             "label": "Enrichment jobs",
                             "description": "View and manage {} enrichment job{} for this table".format(
@@ -616,7 +611,7 @@ def database_actions(datasette, actor, database):
             return [
                 {
                     "href": datasette.urls.path(
-                        "/-/enrich/{}/-/jobs".format(database),
+                        f"/-/enrich/{database}/-/jobs",
                     ),
                     "label": "Enrichment jobs",
                     "description": "View and manage {} enrichment job{} for this database".format(
@@ -652,11 +647,7 @@ def row_actions(datasette, database, table, actor, row):
             return [
                 {
                     "href": datasette.urls.path(
-                        "/-/enrich/{}/{}?{}".format(
-                            database,
-                            tilde_encode(table),
-                            query_string,
-                        )
+                        f"/-/enrich/{database}/{tilde_encode(table)}?{query_string}"
                     ),
                     "label": "Enrich this row",
                     "description": "Run a data cleaning operation against this row",
@@ -895,9 +886,7 @@ class JobProgress extends HTMLElement {
 customElements.define('job-progress', JobProgress);
 """
 
-POLL_JS = (
-    CUSTOM_ELEMENT_JS
-    + """
+POLL_JS = CUSTOM_ELEMENT_JS + """
 async function initEnrichmentProgress(jobs) {
   try {
     // Validate jobs argument
@@ -938,7 +927,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initEnrichmentProgress({{ jobs }});
 });
 """
-)
 
 _restart_running_jobs_lock = asyncio.Lock()
 
@@ -957,14 +945,10 @@ async def _restart_running_jobs_task(datasette):
             continue
 
         # Find jobs marked as 'running'
-        running_jobs = (
-            await db.execute(
-                """
+        running_jobs = (await db.execute("""
             SELECT * FROM _enrichment_jobs
             WHERE status = 'running'
-            """
-            )
-        ).rows
+            """)).rows
 
         # Grab all known enrichments
         all_enrichments = await get_enrichments(datasette)
@@ -980,7 +964,7 @@ async def _restart_running_jobs_task(datasette):
                 # Resume from wherever it left off
                 await enrichment.start_enrichment_in_process(datasette, db, job_id)
             else:
-                print("Unknown enrichment: {}".format(enrichment_slug), file=sys.stderr)
+                print(f"Unknown enrichment: {enrichment_slug}", file=sys.stderr)
 
 
 async def restart_running_jobs(datasette):
