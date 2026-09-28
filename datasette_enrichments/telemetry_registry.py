@@ -65,7 +65,10 @@ RUN_OUTCOME = Attribute(
     "``stopped``: the loop saw some other non-``running`` status, or the job "
     "row disappeared. ``interrupted``: the run was cancelled with "
     "``asyncio.CancelledError``, which means the process is shutting down; "
-    "the job stays ``running`` and is resumed on the next start. ``error``: "
+    "the job usually stays ``running`` and is resumed on the next start - "
+    "unless the cancellation landed once the job was being marked "
+    "``finished`` or during ``finalize()``, in which case it is not run "
+    "again. ``error``: "
     "an unexpected exception escaped the run, e.g. a failing ``finalize()``. "
     "Only ``error`` sets span status ``ERROR``.",
     values={"finished", "paused", "cancelled", "stopped", "interrupted", "error"},
@@ -121,7 +124,9 @@ BATCH_SUCCESS = Attribute(
 )
 RESTART_JOBS = Attribute(
     "enrichments.restart.jobs",
-    "Jobs left ``running`` by a previous process that the restart task resumed.",
+    "Jobs left ``running`` by a previous process that the restart task "
+    "tried to resume. A job whose loop is already running in this process is "
+    "counted but left alone.",
 )
 RESTART_UNKNOWN = Attribute(
     "enrichments.restart.unknown",
@@ -213,8 +218,8 @@ RESTART = SpanName(
     "``running``. A root span with a link to whatever was current when it "
     "started (on hosts without ASGI lifespan, the first request). Each job "
     "it resumes gets its own ``enrichments.job.run`` root span linked back "
-    "to this one.",
-    (RESTART_JOBS, RESTART_UNKNOWN),
+    "to this one. Status ``ERROR`` if the task raised.",
+    (RESTART_JOBS, RESTART_UNKNOWN, ERROR_TYPE),
     kind=SpanKind.INTERNAL,
 )
 

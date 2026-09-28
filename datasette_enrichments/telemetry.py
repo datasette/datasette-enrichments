@@ -32,6 +32,7 @@ from importlib import metadata
 from datasette.telemetry import linked_root_span_kwargs
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace as otel_trace
+from opentelemetry.propagate import inject
 from opentelemetry.trace import Status, StatusCode
 
 from . import telemetry_registry as reg
@@ -75,6 +76,25 @@ def set_attrs(span, mapping):
     for key, value in mapping.items():
         if value is not None:
             span.set_attribute(key, value)
+
+
+def trace_headers():
+    """Headers carrying the current trace context, for ``datasette.client``
+    calls whose internal request span should nest under the current span.
+
+    Workaround for a Datasette core bug: ``TelemetryMiddleware`` extracts the
+    parent from request headers into an empty context, so an internal request
+    with no ``traceparent`` header starts a new trace instead of nesting -
+    https://github.com/simonw/datasette/issues/2969 . Remove this once the
+    minimum Datasette version includes the fix.
+
+    Uses the global propagator: with ``OTEL_PROPAGATORS=none`` it injects
+    nothing and internal requests show up as their own traces again. With no
+    provider installed the current span is invalid and nothing is injected.
+    """
+    headers = {}
+    inject(headers)
+    return headers
 
 
 def _is_interruption(exception):
@@ -263,7 +283,13 @@ class BatchRecorder:
         self.rows = row_count
 
     def succeeded(self, success_count):
-        self.success_count = success_count
+        # enrich_batch()'s return value is only loosely typed (SQLite coerces
+        # it for the progress table): telemetry must never crash the job, so
+        # anything that is not a number counts as "every row"
+        try:
+            self.success_count = int(success_count)
+        except (TypeError, ValueError):
+            self.success_count = None
         self.outcome = "ok"
 
     def set_outcome(self, outcome):
@@ -271,6 +297,11 @@ class BatchRecorder:
         self.outcome = outcome
 
     def fail(self, exception):
+        if self.outcome == "ok":
+            # enrich_batch() already returned: its rows were enriched, even
+            # if a later write (cursor, finished) failed. That failure is the
+            # run's outcome, not this batch's.
+            return
         if _is_interruption(exception):
             # enrichments.batch.outcome has no value for this: the attribute
             # and the batch metrics are left off an interrupted batch
@@ -428,6 +459,7 @@ def restart_span():
             yield recorder
         except BaseException as exception:
             if not _is_interruption(exception):
+                set_attrs(span, {reg.ERROR_TYPE: error_type(exception)})
                 _mark_error(span)
             raise
         finally:

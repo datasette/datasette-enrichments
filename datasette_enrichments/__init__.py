@@ -14,6 +14,7 @@ from datasette import hookimpl
 from datasette.permissions import Action
 from datasette.plugins import pm
 from datasette.resources import DatabaseResource
+from datasette.telemetry import linked_root_span_kwargs
 from datasette.utils import (
     async_call_with_supported_arguments,
     await_me_maybe,
@@ -25,7 +26,7 @@ from markupsafe import Markup, escape
 from wtforms import PasswordField
 from wtforms.validators import DataRequired
 
-from . import hookspecs, views
+from . import hookspecs, telemetry, views
 from .utils import TERMINAL_STATUSES, mark_job_complete, pks_for_rows
 
 if TYPE_CHECKING:
@@ -372,6 +373,7 @@ class Enrichment(ABC):
             """,
             (total_cost_rounded_up, job_id),
         )
+        telemetry.record_cost(self.slug, total_cost_rounded_up)
 
     async def enqueue(
         self,
@@ -390,7 +392,9 @@ class Enrichment(ABC):
         table_path = datasette.urls.table(db.name, table)
 
         response = await datasette.client.get(
-            table_path + ".json" + "?" + qs, skip_permission_checks=True
+            table_path + ".json" + "?" + qs,
+            headers=telemetry.trace_headers(),
+            skip_permission_checks=True,
         )
         filtered_data = response.json()
         if "count" in filtered_data:
@@ -425,12 +429,20 @@ class Enrichment(ABC):
             return cursor.lastrowid
 
         job_id = await db.execute_write_fn(_insert)
+        # trigger defaults to "enqueue"; not passed, so subclasses overriding
+        # start_enrichment_in_process() without it keep working
         await self.start_enrichment_in_process(datasette, db, job_id)
         return job_id
 
     async def start_enrichment_in_process(
-        self, datasette: "Datasette", db: "Database", job_id: int
+        self,
+        datasette: "Datasette",
+        db: "Database",
+        job_id: int,
+        trigger: str = "enqueue",
     ):
+        # trigger says what started this run - "enqueue", "resume" or
+        # "restart" - and is only used for telemetry
         job_row = (
             await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
         ).first()
@@ -443,10 +455,12 @@ class Enrichment(ABC):
             return
         registry = _job_tasks(datasette)
         key = (db.name, job_id)
+        # Captured here, in the caller's context and before create_task(), so
+        # the run's root span links to whatever started it: the enqueue or
+        # resume request, or the restart span
+        link_kwargs = linked_root_span_kwargs()
 
-        async def complete(row_count: int):
-            # Mark the job finished, then run finalize(). If finalize() raises,
-            # run_enrichment() turns the job into 'error'.
+        async def mark_finished(row_count: int):
             await db.execute_write(
                 """
                 update _enrichment_jobs
@@ -458,15 +472,19 @@ class Enrichment(ABC):
                 """,
                 (row_count, job["id"]),
             )
-            await async_call_with_supported_arguments(
-                self.finalize,
-                datasette=datasette,
-                db=db,
-                table=job["table_name"],
-                config=json.loads(job["config"]),
-            )
 
-        async def run_batches() -> str:
+        async def finalize():
+            # If finalize() raises, run_enrichment() turns the job into 'error'
+            with telemetry.finalize_span(self.slug, job_id):
+                await async_call_with_supported_arguments(
+                    self.finalize,
+                    datasette=datasette,
+                    db=db,
+                    table=job["table_name"],
+                    config=json.loads(job["config"]),
+                )
+
+        async def run_batches(run: telemetry.RunRecorder) -> str:
             # Returns "finished" (no rows left, including a fetch that returns
             # no rows at all) or "stopped" (status no longer 'running', or the
             # enrichment raised Pause/Cancel)
@@ -494,105 +512,150 @@ class Enrichment(ABC):
                     )
                 ).first()
                 if not job_row or job_row[0] != "running":
+                    # Record the status seen here: a Resume may set it back
+                    # to 'running' before run_enrichment() re-reads it
+                    run.stopped_with_status(job_row[0] if job_row else None)
                     return "stopped"
-                # Get next batch
-                table_path = datasette.urls.table(
-                    job["database_name"], job["table_name"], format="json"
-                )
-                qs = job["filter_querystring"]
-                if next_cursor:
-                    qs += f"&_next={next_cursor}"
-                qs += f"&_size={self.batch_size}&_shape=objects"
-                response = await datasette.client.get(
-                    table_path + "?" + qs, skip_permission_checks=True
-                )
-                rows = response.json()["rows"]
-                if not rows:
-                    # Filter matched nothing, or the remaining rows were deleted
-                    # (or stopped matching) since the previous batch
-                    await complete(0)
-                    return "finished"
-                # Enrich batch
-                pks = await db.primary_keys(job["table_name"])
-                try:
-                    success_count = await async_call_with_supported_arguments(
-                        self.enrich_batch,
-                        datasette=datasette,
-                        db=db,
-                        table=job["table_name"],
-                        rows=rows,
-                        pks=pks or ["rowid"],
-                        config=json.loads(job["config"]),
-                        job_id=job_id,
-                        actor_id=job["actor_id"],
+                # One span per batch: the fetch, enrich_batch() and the writes
+                with telemetry.batch_span(run) as batch:
+                    # Get next batch
+                    table_path = datasette.urls.table(
+                        job["database_name"], job["table_name"], format="json"
                     )
-                    if success_count is None:
-                        success_count = len(rows)
-                    await record_progress(db, job_id, success_count, 0)
-                except self.Cancel as ex:
-                    await set_job_status(db, job_id, "cancelled", message=str(ex))
-                    return "stopped"
-                except self.Pause as ex:
-                    await set_job_status(db, job_id, "paused", message=str(ex))
-                    return "stopped"
-                except Exception as ex:  # noqa: BLE001
-                    await self.log_error(db, job_id, pks_for_rows(rows, pks), str(ex))
-                # Update next_cursor
-                next_cursor = response.json()["next"]
-                if next_cursor:
-                    await db.execute_write(
-                        """
-                        update _enrichment_jobs
-                        set
-                            next_cursor = ?,
-                            done_count = done_count + ?
-                        where id = ?
-                        """,
-                        (next_cursor, len(rows), job["id"]),
+                    qs = job["filter_querystring"]
+                    if next_cursor:
+                        qs += f"&_next={next_cursor}"
+                    qs += f"&_size={self.batch_size}&_shape=objects"
+                    response = await datasette.client.get(
+                        table_path + "?" + qs,
+                        headers=telemetry.trace_headers(),
+                        skip_permission_checks=True,
                     )
-                else:
-                    await complete(len(rows))
+                    rows = response.json()["rows"]
+                    batch.fetched(len(rows))
+                    if not rows:
+                        # Filter matched nothing, or the remaining rows were
+                        # deleted (or stopped matching) since the previous batch
+                        batch.set_outcome("ok")
+                        await mark_finished(0)
+                        finished = True
+                    else:
+                        # Enrich batch
+                        pks = await db.primary_keys(job["table_name"])
+                        try:
+                            success_count = await async_call_with_supported_arguments(
+                                self.enrich_batch,
+                                datasette=datasette,
+                                db=db,
+                                table=job["table_name"],
+                                rows=rows,
+                                pks=pks or ["rowid"],
+                                config=json.loads(job["config"]),
+                                job_id=job_id,
+                                actor_id=job["actor_id"],
+                            )
+                            if success_count is None:
+                                success_count = len(rows)
+                            await record_progress(db, job_id, success_count, 0)
+                            batch.succeeded(success_count)
+                        except self.Cancel as ex:
+                            batch.set_outcome("cancelled")
+                            run.set_outcome("cancelled")
+                            await set_job_status(
+                                db, job_id, "cancelled", message=str(ex)
+                            )
+                            return "stopped"
+                        except self.Pause as ex:
+                            batch.set_outcome("paused")
+                            run.set_outcome("paused")
+                            await set_job_status(db, job_id, "paused", message=str(ex))
+                            return "stopped"
+                        except Exception as ex:  # noqa: BLE001
+                            # The batch failed; the run carries on
+                            batch.fail(ex)
+                            await self.log_error(
+                                db, job_id, pks_for_rows(rows, pks), str(ex)
+                            )
+                        # Update next_cursor
+                        next_cursor = response.json()["next"]
+                        if next_cursor:
+                            await db.execute_write(
+                                """
+                                update _enrichment_jobs
+                                set
+                                    next_cursor = ?,
+                                    done_count = done_count + ?
+                                where id = ?
+                                """,
+                                (next_cursor, len(rows), job["id"]),
+                            )
+                            finished = False
+                        else:
+                            await mark_finished(len(rows))
+                            finished = True
+                if finished:
+                    # Outside the batch span: finalize() is a child of the run
+                    await finalize()
                     return "finished"
 
         async def run_enrichment():
             # asyncio.CancelledError (shutdown) is deliberately not caught: the
-            # job stays 'running' in the DB and is resumed on the next start
-            try:
-                outcome = await run_batches()
-            except Exception as ex:
-                # Anything that escaped the per-batch error handling, e.g. a DB
-                # error or a failing finalize(). Policy: mark the job 'error'
-                # even if it was already set to 'finished' before finalize()
-                # ran, so waiters wake up and the failure is visible in the UI.
-                logger.exception(
-                    "Enrichment job %s in database %s failed", job_id, db.name
-                )
+            # job stays 'running' in the DB and is resumed on the next start.
+            # job_run_span() records it as an 'interrupted' run and re-raises.
+            with telemetry.job_run_span(self.slug, job, trigger, link_kwargs) as run:
                 try:
-                    # If this write fails too, that exception is logged again by
-                    # the done-callback and the status stays 'running'; acceptable
-                    await set_job_status(db, job_id, "error", message=type(ex).__name__)
-                finally:
-                    await mark_job_complete(datasette, job_id, db.name)
-                return
-            if outcome == "finished":
-                await mark_job_complete(datasette, job_id, db.name)
-            elif outcome == "stopped":
-                # We stopped because the status was not 'running'. A Resume may
-                # have set it back to 'running' after we checked, but seen this
-                # task still registered and so not started a new loop. Close
-                # that window: deregister first, then re-read the status.
-                _forget_job_task(registry, key, asyncio.current_task())
-                row = (
-                    await db.execute(
-                        "select status from _enrichment_jobs where id = ?", (job_id,)
+                    outcome = await run_batches(run)
+                except Exception as ex:
+                    # Anything that escaped the per-batch error handling, e.g. a
+                    # DB error or a failing finalize(). Policy: mark the job
+                    # 'error' even if it was already set to 'finished' before
+                    # finalize() ran, so waiters wake up and the failure is
+                    # visible in the UI.
+                    run.fail(ex)
+                    logger.exception(
+                        "Enrichment job %s in database %s failed", job_id, db.name
                     )
-                ).first()
-                status = row[0] if row else None
-                if status == "running":
-                    await self.start_enrichment_in_process(datasette, db, job_id)
-                elif status in TERMINAL_STATUSES:
-                    # e.g. cancelled - wake anything in wait_for_job()
+                    try:
+                        # If this write fails too, that exception is logged again
+                        # by the done-callback and the status stays 'running';
+                        # acceptable
+                        await set_job_status(
+                            db, job_id, "error", message=type(ex).__name__
+                        )
+                    finally:
+                        await mark_job_complete(datasette, job_id, db.name)
+                    return
+                if outcome == "finished":
+                    run.set_outcome("finished")
                     await mark_job_complete(datasette, job_id, db.name)
+                elif outcome == "stopped":
+                    # We stopped because the status was not 'running'. A Resume
+                    # may have set it back to 'running' after we checked, but
+                    # seen this task still registered and so not started a new
+                    # loop. Close that window: deregister first, then re-read
+                    # the status.
+                    _forget_job_task(registry, key, asyncio.current_task())
+                    row = (
+                        await db.execute(
+                            "select status from _enrichment_jobs where id = ?",
+                            (job_id,),
+                        )
+                    ).first()
+                    status = row[0] if row else None
+                    if run.outcome is None:
+                        # Only when claim() failed: the status check and a
+                        # Pause/Cancel from the enrichment set it themselves
+                        run.stopped_with_status(status)
+                    if status == "running":
+                        # Only reached when a Resume raced this stopping loop,
+                        # so the new run is a resume. Its span links to this
+                        # run's span, which is current here.
+                        await self.start_enrichment_in_process(
+                            datasette, db, job_id, trigger="resume"
+                        )
+                    elif status in TERMINAL_STATUSES:
+                        # e.g. cancelled - wake anything in wait_for_job()
+                        await mark_job_complete(datasette, job_id, db.name)
 
         # The live-task check and the registry insert must not have an await
         # between them, or two concurrent callers (Resume vs. restart, Resume
@@ -1041,6 +1104,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 async def _restart_running_jobs_task(datasette):
+    # A linked root span of its own: on hosts without ASGI lifespan this task
+    # is launched from inside the first request, which it must not become a
+    # child of. Each job it resumes gets a run span linked back to it.
+    with telemetry.restart_span() as restart:
+        await _restart_running_jobs(datasette, restart)
+
+
+async def _restart_running_jobs(datasette, restart: telemetry.RestartRecorder):
     # For each database known to Datasette, look for running jobs
     for database_name in datasette.databases:
         db = datasette.get_database(database_name)
@@ -1073,8 +1144,12 @@ async def _restart_running_jobs_task(datasette):
             if enrichment_slug in all_enrichments:
                 enrichment = all_enrichments[enrichment_slug]
                 # Resume from wherever it left off
-                await enrichment.start_enrichment_in_process(datasette, db, job_id)
+                await enrichment.start_enrichment_in_process(
+                    datasette, db, job_id, trigger="restart"
+                )
+                restart.jobs += 1
             else:
+                restart.unknown += 1
                 logger.warning(
                     "Cannot resume job %s: unknown enrichment %s",
                     job_id,

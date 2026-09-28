@@ -319,6 +319,17 @@ def load_uppercase_plugin():
         async def finalize(self, datasette, db, table, config):
             raise RuntimeError("finalize() failed")
 
+    class CostDemo(Enrichment):
+        # Reports a cost of 5 hundredths of a cent for every batch
+        name = "Cost demo"
+        slug = "costdemo"
+        description = "Calls increment_cost() once per batch"
+        batch_size = 10
+        cost_per_batch = 5
+
+        async def enrich_batch(self, db: Database, rows: list[dict], job_id: int):
+            await self.increment_cost(db, job_id, self.cost_per_batch)
+
     class EnrichmentsDemoPlugin:
         __name__ = "EnrichmentsDemoPlugin"
 
@@ -332,6 +343,7 @@ def load_uppercase_plugin():
                 QueueControlledEnrichment(),
                 CountBatches(),
                 FinalizeRaises(),
+                CostDemo(),
             ]
 
     pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")
