@@ -25,4 +25,5 @@ setup
 usage
 permissions
 developing
+telemetry
 ```

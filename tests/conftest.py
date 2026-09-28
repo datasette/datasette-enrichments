@@ -9,8 +9,35 @@ from datasette import hookimpl
 from datasette.app import Datasette
 from datasette.database import Database
 from datasette.plugins import pm
+
+# Importing the fixture names registers them: session-scoped autouse
+# tracer/meter providers with in-memory export (skipped when the SDK is not
+# installed), and a per-test reset that drains them. Tests take otel_spans /
+# otel_metrics.
+from datasette.telemetry_testing import (  # noqa: F401
+    MetricsCollector,
+    otel_meter_provider,
+    otel_metrics,
+    otel_provider,
+    otel_reset,
+    otel_spans,
+)
 from wtforms import Form, SelectField, StringField
 from wtforms.widgets import CheckboxInput, ListWidget
+
+
+def pytest_collection_modifyitems(items):
+    # These tests shell out to a fresh interpreter, and the kit documents a
+    # macOS/CPython 3.13 fork+exec crash (SIGBUS) when subprocess-spawning
+    # tests run late in a thread-heavy process - so run them first, as
+    # Datasette's own conftest does.
+    subprocess_tests = {
+        "test_package_never_imports_the_sdk",
+        "test_import_without_provider_is_noop",
+    }
+    front = [item for item in items if item.name in subprocess_tests]
+    for item in reversed(front):
+        items.insert(0, items.pop(items.index(item)))
 
 
 class MultiCheckboxField(SelectField):
@@ -232,10 +259,15 @@ def load_uppercase_plugin():
         ):
             row = rows[0]
             result = await datasette.enrichment_queue.get()
-            if result == "pause":
-                raise self.Pause("pause message")
-            if result == "cancel":
-                raise self.Cancel("cancel message")
+            # "pause", "cancel" or "raise", optionally followed by
+            # ":<message>" to set the exception's message
+            action, _, message = result.partition(":")
+            if action == "pause":
+                raise self.Pause(message or "pause message")
+            if action == "cancel":
+                raise self.Cancel(message or "cancel message")
+            if action == "raise":
+                raise Exception(message or "raise message")  # noqa: TRY002
             datasette.enrichment_processed_count += 1
             wheres = " and ".join(f'"{pk}" = ?' for pk in pks)
             await db.execute_write(
@@ -292,6 +324,17 @@ def load_uppercase_plugin():
         async def finalize(self, datasette, db, table, config):
             raise RuntimeError("finalize() failed")
 
+    class CostDemo(Enrichment):
+        # Reports a cost of 5 hundredths of a cent for every batch
+        name = "Cost demo"
+        slug = "costdemo"
+        description = "Calls increment_cost() once per batch"
+        batch_size = 10
+        cost_per_batch = 5
+
+        async def enrich_batch(self, db: Database, rows: list[dict], job_id: int):
+            await self.increment_cost(db, job_id, self.cost_per_batch)
+
     class EnrichmentsDemoPlugin:
         __name__ = "EnrichmentsDemoPlugin"
 
@@ -305,6 +348,7 @@ def load_uppercase_plugin():
                 QueueControlledEnrichment(),
                 CountBatches(),
                 FinalizeRaises(),
+                CostDemo(),
             ]
 
     pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")

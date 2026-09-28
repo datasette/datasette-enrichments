@@ -3,6 +3,7 @@ import urllib.parse
 
 from datasette import Forbidden, NotFound, Response
 from datasette.resources import DatabaseResource
+from datasette.telemetry import request_span
 from datasette.utils import (
     MultiParams,
     async_call_with_supported_arguments,
@@ -10,6 +11,8 @@ from datasette.utils import (
     tilde_decode,
 )
 
+from . import telemetry
+from . import telemetry_registry as reg
 from .utils import TERMINAL_STATUSES
 
 
@@ -300,9 +303,14 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
         config = {field.name: field.data for field in form}
 
     # Call initialize method, which can create tables etc
-    await async_call_with_supported_arguments(
-        enrichment.initialize, datasette=datasette, db=db, table=table, config=config
-    )
+    with telemetry.initialize_span(enrichment.slug, db.name):
+        await async_call_with_supported_arguments(
+            enrichment.initialize,
+            datasette=datasette,
+            db=db,
+            table=table,
+            config=config,
+        )
 
     job_id = await enrichment.enqueue(
         datasette,
@@ -312,6 +320,10 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
         config,
         request.actor.get("id") if request.actor else None,
     )
+    span = request_span(request.scope)
+    if span is not None:
+        span.set_attribute(reg.ENRICHMENT, enrichment.slug)
+        span.set_attribute(reg.JOB_ID, job_id)
 
     # Set message and redirect to table
     datasette.add_message(
@@ -409,7 +421,9 @@ async def resume_job(datasette, db, job_id, message):
     enrichment = all_enrichments[job["enrichment"]]
     # No-op if this job's previous loop is still running (e.g. paused mid-batch):
     # that loop sees 'running' at its next status check and carries on
-    await enrichment.start_enrichment_in_process(datasette, db, job_id)
+    await enrichment.start_enrichment_in_process(
+        datasette, db, job_id, trigger="resume"
+    )
 
 
 async def cancel_job(db, job_id, message):
@@ -432,6 +446,9 @@ async def update_job_status_view(datasette, request, action):
     job_id = int(request.url_vars["job_id"])
     if request.method != "POST":
         return Response("POST required", status=400)
+    span = request_span(request.scope)
+    if span is not None:
+        span.set_attribute(reg.JOB_ID, job_id)
     try:
         if action == "pause":
             await pause_job(db, job_id, message)

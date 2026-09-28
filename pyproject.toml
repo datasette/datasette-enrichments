@@ -11,6 +11,8 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "datasette>=1.0a41",
+    # Declared explicitly because the package imports it directly
+    "opentelemetry-api>=1.37",
     "WTForms",
     "datasette-secrets>=0.2"
 ]
@@ -20,8 +22,11 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "packaging",
+    "opentelemetry-sdk>=1.37",
     # Pinned: ruff's default rule set changes between releases
     "ruff==0.16.9",
+    # CI checks the cog-generated parts of docs/*.md are up to date
+    "cogapp",
 ]
 
 [build-system]
