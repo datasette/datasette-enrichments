@@ -1,16 +1,27 @@
 import asyncio
 import inspect
+import json
+import sqlite3
 import subprocess
 import sys
 import textwrap
 import time
 
 import pytest
+import pytest_asyncio
 
 pytest.importorskip("opentelemetry.sdk")
 
 from datasette import telemetry_registry as core
-from datasette.telemetry_testing import assert_package_never_imports_sdk
+from datasette.app import Datasette
+from datasette.telemetry_testing import (
+    assert_metrics_conform,
+    assert_metrics_covered,
+    assert_no_forbidden_values,
+    assert_package_never_imports_sdk,
+    assert_spans_conform,
+    assert_spans_covered,
+)
 from opentelemetry.trace import SpanKind, StatusCode
 
 from datasette_enrichments import telemetry_registry as reg
@@ -182,25 +193,28 @@ def active_runs(otel_metrics, slug):
     return points[0].value if points else 0
 
 
-def root_cookies(datasette):
-    return {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+def actor_cookies(datasette, actor_id="root"):
+    return {"ds_actor": datasette.sign({"a": {"id": actor_id}}, "actor")}
 
 
-async def enqueue(datasette, table, slug, data=None, query=""):
+async def enqueue(
+    datasette, table, slug, data=None, query="", database="data", actor_id="root"
+):
     "Submit a job through the enrichment form; returns the new job's id."
     response = await datasette.client.post(
-        f"/-/enrich/data/{table}/{slug}{query}",
-        cookies=root_cookies(datasette),
+        f"/-/enrich/{database}/{table}/{slug}{query}",
+        cookies=actor_cookies(datasette, actor_id),
         data=data or {},
     )
-    assert response.status_code == 302
+    assert response.status_code == 302, response.text
     return int(response.headers["location"].split("=")[-1])
 
 
-async def job_action(datasette, job_id, action):
+async def job_action(datasette, job_id, action, database="data", actor_id="root"):
+    "Press the Pause, Resume or Cancel button on a job."
     response = await datasette.client.post(
-        f"/-/enrich/data/-/jobs/{job_id}/{action}",
-        cookies=root_cookies(datasette),
+        f"/-/enrich/{database}/-/jobs/{job_id}/{action}",
+        cookies=actor_cookies(datasette, actor_id),
         data={},
     )
     assert response.status_code == 302
@@ -743,3 +757,259 @@ def test_restart_span_failure_records_error_type(otel_spans):
     assert restart.attributes[reg.ERROR_TYPE] == "KeyError"
     assert restart.status.status_code == StatusCode.ERROR
     assert_text_nowhere([restart], "secret-ish")
+
+
+# --- Registry conformance and privacy -------------------------------------
+#
+# One broad workload that makes every registered span and metric fire, with a
+# distinct sentinel string planted in every piece of user data a job touches.
+# Then a single collect() - the counters and histograms are DELTA, so an
+# earlier collect() would hide what it drained - and the kit's conformance
+# assertions in both directions, plus the privacy walk across EVERY scope:
+# a sentinel leaking through core's request or db.query spans is still a leak.
+
+SENTINEL_CONFIG = "SENTINEL_CONFIG_7f3a"
+SENTINEL_FILTER = "SENTINEL_FILTER_2b9e"
+SENTINEL_ROW = "SENTINEL_ROW_5c1d"
+SENTINEL_PK = "SENTINEL_PK_8e4f"
+SENTINEL_ACTOR = "SENTINEL_ACTOR_3a6b"
+SENTINEL_EXC = "SENTINEL_EXC_9d2c"
+SENTINEL_PAUSE = "SENTINEL_PAUSE_1f7e"
+SENTINEL_CANCEL = "SENTINEL_CANCEL_6b3a"
+SENTINEL_SECRET = "SENTINEL_SECRET_4e8d"
+FORBIDDEN = {
+    SENTINEL_CONFIG,
+    SENTINEL_FILTER,
+    SENTINEL_ROW,
+    SENTINEL_PK,
+    SENTINEL_ACTOR,
+    SENTINEL_EXC,
+    SENTINEL_PAUSE,
+    SENTINEL_CANCEL,
+    SENTINEL_SECRET,
+}
+# Every row matches this filter; a normal column filter, so core binds the
+# value as a parameter. (A _where= literal would reach core's db.query.text -
+# documented in docs/telemetry.md, deliberately not planted here.)
+SENTINEL_QUERY = f"?s__not={SENTINEL_FILTER}"
+PEOPLE_ROWS = 25
+
+
+def person_id(i):
+    # A text primary key, so batch cursors (next_cursor, _next=) and the ids
+    # passed to log_error() carry the sentinel
+    return f"{SENTINEL_PK}_{i:03}"
+
+
+@pytest_asyncio.fixture
+async def private_datasette(tmpdir, monkeypatch):
+    # The secretreplace enrichment's API key, read from the environment
+    monkeypatch.setenv("DATASETTE_SECRETS_STRING_SECRET", SENTINEL_SECRET)
+    path = str(tmpdir / "private.db")
+    conn = sqlite3.connect(path)
+    with conn:
+        conn.execute("create table people (id text primary key, s text)")
+        for i in range(PEOPLE_ROWS):
+            # secretreplace swaps SENTINEL_CONFIG for the secret in these
+            conn.execute(
+                "insert into people (id, s) values (?, ?)",
+                (person_id(i), f"{SENTINEL_ROW} {i} {SENTINEL_CONFIG}"),
+            )
+    datasette = Datasette(
+        [path],
+        # Only the sentinel actor may run enrichments
+        config={"permissions": {"enrichments": {"id": SENTINEL_ACTOR}}},
+    )
+    datasette._test_db = conn
+    await datasette.invoke_startup()
+    yield datasette
+    tasks = list(getattr(datasette, "_enrichment_job_tasks", {}).values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    conn.close()
+
+
+async def _insert_private_running_job(datasette, enrichment, next_cursor):
+    # A job a previous process left 'running', carrying every sentinel it can
+    from datasette_enrichments import ensure_tables
+
+    db = datasette.get_database("private")
+    await ensure_tables(db)
+    return (
+        await db.execute_write(
+            """
+            insert into _enrichment_jobs (
+                status, enrichment, database_name, table_name,
+                filter_querystring, config, next_cursor, row_count,
+                done_count, error_count, actor_id
+            ) values (
+                'running', :enrichment, 'private', 'people', :filter, :config,
+                :next_cursor, :row_count, 0, 0, :actor_id
+            )
+            """,
+            {
+                "enrichment": enrichment,
+                "filter": SENTINEL_QUERY[1:],
+                "config": json.dumps({"prompt": SENTINEL_CONFIG}),
+                "next_cursor": next_cursor,
+                "row_count": PEOPLE_ROWS,
+                "actor_id": SENTINEL_ACTOR,
+            },
+        )
+    ).lastrowid
+
+
+def run_of(job_id, trigger=None):
+    "Span predicate: the run span of ``job_id``, optionally with ``trigger``."
+    return lambda span: (
+        for_job(job_id)(span)
+        and (trigger is None or span.attributes[reg.TRIGGER] == trigger)
+    )
+
+
+@pytest.mark.asyncio
+async def test_registry_conformance_and_privacy(
+    private_datasette, otel_spans, otel_metrics
+):
+    datasette = private_datasette
+
+    async def submit(slug, data=None):
+        return await enqueue(
+            datasette,
+            "people",
+            slug,
+            data,
+            query=SENTINEL_QUERY,
+            database="private",
+            actor_id=SENTINEL_ACTOR,
+        )
+
+    async def press(job_id, action):
+        await job_action(
+            datasette, job_id, action, database="private", actor_id=SENTINEL_ACTOR
+        )
+
+    # 1. Restart: a running job with a known slug, resuming from a sentinel
+    # cursor, and one with an unknown slug. Inserted BEFORE any
+    # datasette.client request: the first request launches the background
+    # tasks, including the restart scan, which would otherwise find nothing.
+    restarted = await _insert_private_running_job(
+        datasette, "countbatches", person_id(PEOPLE_ROWS - 6)
+    )
+    await _insert_private_running_job(datasette, "no-such-enrichment", None)
+    await datasette.start_background_tasks()
+    restart = await wait_for_span(otel_spans, reg.RESTART)
+    assert restart.attributes[reg.RESTART_JOBS] == 1
+    assert restart.attributes[reg.RESTART_UNKNOWN] == 1
+    run = await wait_for_span(otel_spans, reg.JOB_RUN, run_of(restarted, "restart"))
+    assert run.attributes[reg.RUN_ROWS] == 5
+
+    # 2. Batches that succeed, with the config, filter, rows, primary keys,
+    # actor and secret all carrying sentinels
+    secret_job = await submit(
+        "secretreplace", {"column": "s", "string": SENTINEL_CONFIG}
+    )
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(secret_job))
+    # The secret really was used
+    (row,) = datasette._test_db.execute(
+        "select s from people where id = ?", (person_id(0),)
+    ).fetchall()
+    assert row == (f"{SENTINEL_ROW} 0 {SENTINEL_SECRET}",)
+    # The config and actor reached the job row through the form POST, not
+    # just through the directly inserted restart fixture
+    config, actor_id = datasette._test_db.execute(
+        "select config, actor_id from _enrichment_jobs where id = ?", (secret_job,)
+    ).fetchone()
+    assert SENTINEL_CONFIG in config
+    assert actor_id == SENTINEL_ACTOR
+
+    # 3. A batch that raises, then a Pause exception; resumed through the UI,
+    # then a Cancel exception - every message a sentinel
+    queue_job = await submit("queue")
+    queue = datasette.enrichment_queue
+    await queue.put("0")
+    await queue.put(f"raise:{SENTINEL_EXC}")
+    await queue.put(f"pause:{SENTINEL_PAUSE}")
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(queue_job, "enqueue"))
+    await press(queue_job, "resume")
+    await queue.put(f"cancel:{SENTINEL_CANCEL}")
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(queue_job, "resume"))
+
+    # 4. Partial row errors, logged by the enrichment itself
+    errors_job = await submit("haserrors")
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(errors_job))
+
+    # 5. Pause from the UI mid-batch, then Resume
+    datasette._enrich_gate = asyncio.Event()
+    paused_job = await submit("countbatches")
+    await wait_until(lambda: first_batch_in_flight(datasette), "first batch")
+    await press(paused_job, "pause")
+    datasette._enrich_gate.set()
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(paused_job, "enqueue"))
+    await press(paused_job, "resume")
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(paused_job, "resume"))
+
+    # 6. finalize() raises
+    finalize_job = await submit("finalizeraises")
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(finalize_job))
+
+    # 7. Cost
+    cost_job = await submit("costdemo")
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(cost_job))
+
+    # 8. A run interrupted mid-batch, as at shutdown
+    datasette._enrich_gate = asyncio.Event()  # never set
+    interrupted_job = await submit("countbatches")
+    await wait_until(lambda: first_batch_in_flight(datasette), "first batch")
+    task = datasette._enrichment_job_tasks[("private", interrupted_job)]
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    await wait_for_span(otel_spans, reg.JOB_RUN, run_of(interrupted_job))
+
+    # Every job loop has exited, so no span is still open - and so unchecked -
+    # when the spans are gathered
+    await wait_until(
+        lambda: all(t.done() for t in datasette._enrichment_job_tasks.values()),
+        "every job task to finish",
+    )
+    finished = otel_spans.get_finished_spans()
+    otel_metrics.collect()
+
+    # Every sentinel really was planted: the database holds each one (the job
+    # rows, progress messages, error log and enriched rows), so the privacy
+    # walk below cannot pass vacuously
+    stored = "\n".join(datasette._test_db.iterdump())
+    assert {sentinel for sentinel in FORBIDDEN if sentinel not in stored} == set()
+
+    # The workload reached every outcome it claims to
+    runs = ours(otel_spans, reg.JOB_RUN)
+    assert {s.attributes[reg.RUN_OUTCOME] for s in runs} == {
+        "finished",
+        "paused",
+        "cancelled",
+        "interrupted",
+        "error",
+    }
+    assert {s.attributes[reg.TRIGGER] for s in runs} == {"enqueue", "resume", "restart"}
+    assert {
+        s.attributes[reg.BATCH_OUTCOME]
+        for s in ours(otel_spans, reg.BATCH)
+        if reg.BATCH_OUTCOME in s.attributes
+    } == {"ok", "error", "paused", "cancelled"}
+    # haserrors logs 2 errors in each full batch of 10: 25 rows -> 4 errors
+    assert (
+        otel_metrics.point(
+            reg.ROWS, {reg.ENRICHMENT: "haserrors", reg.ROW_RESULT: "error"}
+        ).value
+        == 4
+    )
+
+    assert_spans_conform(reg.SPANS, finished, scope_name=SCOPE)
+    assert_spans_covered(reg.SPANS, finished, scope_name=SCOPE)
+    assert_metrics_conform(reg.METRICS, otel_metrics, scope_name=SCOPE)
+    assert_metrics_covered(reg.METRICS, otel_metrics, scope_name=SCOPE)
+    # No scope_name: core's request, db.query and write spans are checked too
+    assert_no_forbidden_values(
+        FORBIDDEN, finished_spans=finished, collector=otel_metrics
+    )

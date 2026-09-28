@@ -44,3 +44,6 @@ jobs:
     - name: Run ruff format
       run: |
         ruff format --check .
+    - name: Check docs are up to date (cog)
+      run: |
+        cog --check docs/*.md

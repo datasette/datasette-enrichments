@@ -77,9 +77,11 @@ BATCH_OUTCOME = Attribute(
     "enrichments.batch.outcome",
     "How the batch ended. ``ok``: ``enrich_batch()`` returned, including "
     "when it logged errors for some rows, and the trailing fetch that "
-    "returns no rows. ``error``: an exception escaped the batch, e.g. "
-    "``enrich_batch()`` raised; every row in the batch counts as an error "
-    "and the run carries on. ``paused`` / ``cancelled``: ``enrich_batch()`` "
+    "returns no rows. ``error``: an exception escaped the batch and every "
+    "row in the batch counts as an error. If ``enrich_batch()`` raised it, "
+    "the error is logged and the run carries on; any other exception, e.g. "
+    "a failed row fetch, also ends the run with ``error``. "
+    "``paused`` / ``cancelled``: ``enrich_batch()`` "
     "raised ``self.Pause`` / ``self.Cancel``; its rows are processed again "
     "on resume. Only ``error`` sets span status ``ERROR``.",
     values={"ok", "error", "paused", "cancelled"},

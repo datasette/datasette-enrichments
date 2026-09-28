@@ -259,10 +259,15 @@ def load_uppercase_plugin():
         ):
             row = rows[0]
             result = await datasette.enrichment_queue.get()
-            if result == "pause":
-                raise self.Pause("pause message")
-            if result == "cancel":
-                raise self.Cancel("cancel message")
+            # "pause", "cancel" or "raise", optionally followed by
+            # ":<message>" to set the exception's message
+            action, _, message = result.partition(":")
+            if action == "pause":
+                raise self.Pause(message or "pause message")
+            if action == "cancel":
+                raise self.Cancel(message or "cancel message")
+            if action == "raise":
+                raise Exception(message or "raise message")  # noqa: TRY002
             datasette.enrichment_processed_count += 1
             wheres = " and ".join(f'"{pk}" = ?' for pk in pks)
             await db.execute_write(

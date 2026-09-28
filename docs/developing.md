@@ -263,6 +263,18 @@ api_key = await self.get_secret(datasette, config)
 ```
 You must pass both the `datasette` and the `config` arguments that were passed to those methods.
 
+## Telemetry
+
+Datasette 1.0a41 and later can emit OpenTelemetry traces and metrics, and so can this plugin: see {doc}`telemetry` for what a job looks like and how to switch it on. Here is what that means for enrichment authors.
+
+- **Your code is already traced.** Everything your `enrich_batch()` does runs inside that batch's `enrichments.batch` span. Your `db.execute*()` calls show up beneath it as core's `db.query` spans. Calls made through an HTTP client that has OpenTelemetry instrumentation installed show up beneath it as that client's own spans. You don't need to do anything for this.
+- **Adding your own spans is optional.** If you do, create your own tracer with `opentelemetry.trace.get_tracer()` using your package name as the instrumentation scope, and prefix span, metric and attribute names with your package name, such as `enrichments_opencage.geocode`. Don't use the `enrichments.*` or `datasette.*` prefixes, which belong to this plugin and to Datasette. Depend on `opentelemetry-api` only, and never configure a provider or an exporter: that is the operator's job.
+- **Pass named functions to `db.execute_write_fn()`.** Core records the function's `__qualname__` as the span's `datasette.callback` attribute, and a lambda shows up as just `<lambda>`.
+- **Never put row data, prompts, API responses or other user data in span attributes, events or status descriptions.** Telemetry is often exported to a third-party service. Record counts, sizes and fixed sets of values instead, and use the exception's class name rather than its message. Pass values to SQL as parameters: core records the text of every query, but never its parameters.
+- **Keep row data out of database exceptions.** When a database call fails, core records the exception's message and traceback on its `db.query` span. Don't put row data in exceptions raised inside `execute_write_fn()` callbacks, and don't build SQL that could fail with row values in the error message.
+
+See [Telemetry for plugin authors](https://docs.datasette.io/en/latest/plugin_telemetry.html) in the Datasette documentation for how to declare, test and document your own spans and metrics.
+
 ## Writing tests for enrichments
 
 Take a look at the [test suite for datasette-enrichments-opencage](https://github.com/datasette/datasette-enrichments-opencage/blob/main/tests/test_enrichments_opencage.py) for an example of how to test an enrichment.
