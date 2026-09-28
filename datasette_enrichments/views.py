@@ -1,13 +1,14 @@
-from datasette import Response, NotFound, Forbidden
-from datasette.resources import DatabaseResource
-from datasette.utils import (
-    async_call_with_supported_arguments,
-    path_with_removed_args,
-    MultiParams,
-    tilde_decode,
-)
 import json
 import urllib.parse
+
+from datasette import Forbidden, NotFound, Response
+from datasette.resources import DatabaseResource
+from datasette.utils import (
+    MultiParams,
+    async_call_with_supported_arguments,
+    path_with_removed_args,
+    tilde_decode,
+)
 
 
 async def check_permissions(datasette, request, database):
@@ -22,9 +23,9 @@ async def check_permissions(datasette, request, database):
 async def job_view(datasette, request):
     "Page showing details of an enrichment job"
     from . import (
-        get_enrichments,
-        ensure_tables,
         CUSTOM_ELEMENT_JS,
+        ensure_tables,
+        get_enrichments,
         ms_since_2025_to_datetime,
     )
 
@@ -174,7 +175,7 @@ async def enrichment_view(datasette, request):
 
     return Response.html(
         await datasette.render_template(
-            ["enrichment-{}.html".format(enrichment.slug), "enrichment.html"],
+            [f"enrichment-{enrichment.slug}.html", "enrichment.html"],
             {
                 "database": database,
                 "table": table,
@@ -212,7 +213,7 @@ async def enrichment_picker(datasette, request):
     response = await datasette.client.get(url, skip_permission_checks=True)
     if response.status_code != 200:
         return Response.text(
-            "Error fetching data from {}: {}".format(url, response.text),
+            f"Error fetching data from {url}: {response.text}",
             status=500,
         )
     filtered_data = response.json()
@@ -228,7 +229,7 @@ async def enrichment_picker(datasette, request):
                 "path": path_with_removed_args(
                     request=request,
                     args={"_sort"},
-                    path="{}/{}".format(request.path, enrichment.slug),
+                    path=f"{request.path}/{enrichment.slug}",
                 ),
             }
         )
@@ -280,7 +281,7 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
     if form and not form.validate():
         return Response.html(
             await datasette.render_template(
-                ["enrichment-{}.html".format(enrichment.slug), "enrichment.html"],
+                [f"enrichment-{enrichment.slug}.html", "enrichment.html"],
                 {
                     "database": database,
                     "table": table,
@@ -321,12 +322,12 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
         datasette.INFO,
     )
     return Response.redirect(
-        datasette.urls.table(db.name, table) + "?_enrichment_job={}".format(job_id)
+        datasette.urls.table(db.name, table) + f"?_enrichment_job={job_id}"
     )
 
 
 async def job_progress_view(datasette, request):
-    from . import get_enrichments, ensure_tables
+    from . import ensure_tables, get_enrichments
 
     job_id = request.url_vars["job_id"]
     database = request.url_vars["database"]
@@ -376,9 +377,7 @@ async def job_progress_view(datasette, request):
         {
             "total": job["row_count"],
             "title": title,
-            "url": datasette.urls.path(
-                "/-/enrich/{}/-/jobs/{}".format(database, job_id)
-            ),
+            "url": datasette.urls.path(f"/-/enrich/{database}/-/jobs/{job_id}"),
             "is_complete": is_complete,
             "sections": sections,
         }
@@ -394,7 +393,7 @@ async def pause_job(db, job_id, message):
 
 
 async def resume_job(datasette, db, job_id, message):
-    from . import set_job_status, get_enrichments
+    from . import get_enrichments, set_job_status
 
     await set_job_status(
         db, job_id, "running", allowed_statuses=("paused",), message=message

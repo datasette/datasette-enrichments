@@ -1,6 +1,5 @@
 import asyncio
-import secrets
-from typing import Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
@@ -12,13 +11,13 @@ class WaitForJobException(Exception):
         self.msg = msg
 
     def __repr__(self):
-        return "<WaitForJobException {}: {}>".format(self.job_id, self.msg)
+        return f"<WaitForJobException {self.job_id}: {self.msg}>"
 
 
 async def wait_for_job(
     datasette: "Datasette",
-    job_id: Union[int, str],
-    database: Optional[str] = None,
+    job_id: int | str,
+    database: str | None = None,
     timeout=None,
 ):
     "Returns when the job has completed, using an asyncio.Event"
@@ -49,7 +48,7 @@ async def wait_for_job(
 
 
 async def mark_job_complete(
-    datasette: "Datasette", job_id: int, database: Optional[str] = None
+    datasette: "Datasette", job_id: int, database: str | None = None
 ):
     _ensure_enrichment_properties(datasette)
     if not database:

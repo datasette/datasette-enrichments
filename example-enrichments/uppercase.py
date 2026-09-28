@@ -1,9 +1,10 @@
-from datasette_enrichments import Enrichment
-from datasette.database import Database
-from typing import List
-from wtforms import Form, SelectMultipleField
-from wtforms.widgets import ListWidget, CheckboxInput
 import asyncio
+
+from datasette.database import Database
+from wtforms import Form, SelectMultipleField
+from wtforms.widgets import CheckboxInput, ListWidget
+
+from datasette_enrichments import Enrichment
 
 
 class MultiCheckboxField(SelectMultipleField):
@@ -30,19 +31,19 @@ class Uppercase(Enrichment):
         datasette,
         db: Database,
         table: str,
-        rows: List[dict],
-        pks: List[str],
+        rows: list[dict],
+        pks: list[str],
         config: dict,
         job_id: int,
-        actor_id: str = None,
+        actor_id: str | None = None,
     ):
         columns = config.get("columns") or []
         if not columns:
             return
-        wheres = " and ".join('"{}" = ?'.format(pk) for pk in pks)
-        sets = ", ".join('"{}" = upper("{}")'.format(col, col) for col in columns)
+        wheres = " and ".join(f'"{pk}" = ?' for pk in pks)
+        sets = ", ".join(f'"{col}" = upper("{col}")' for col in columns)
         params = [[row[pk] for pk in pks] for row in rows]
         await db.execute_write_many(
-            "update [{}] set {} where {}".format(table, sets, wheres), params
+            f"update [{table}] set {sets} where {wheres}", params
         )
         await asyncio.sleep(0.3)

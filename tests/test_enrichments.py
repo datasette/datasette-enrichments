@@ -1,13 +1,15 @@
 import asyncio
-from datasette_enrichments.utils import wait_for_job
-from datasette.app import Datasette
-from datasette.utils import tilde_encode
-from datasette import version
-from packaging.version import parse
-import pytest
-import pytest_asyncio
 import random
 import sqlite3
+
+import pytest
+import pytest_asyncio
+from datasette import version
+from datasette.app import Datasette
+from datasette.utils import tilde_encode
+from packaging.version import parse
+
+from datasette_enrichments.utils import wait_for_job
 
 
 @pytest_asyncio.fixture
@@ -56,26 +58,22 @@ async def datasette(tmpdir):
 async def test_uppercase_plugin(datasette, is_root, table):
     encoded_table = tilde_encode(table)
     if not is_root:
-        response1 = await datasette.client.get(
-            "/-/enrich/data/{}".format(encoded_table)
-        )
+        response1 = await datasette.client.get(f"/-/enrich/data/{encoded_table}")
         assert response1.status_code == 403
         return
 
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response1 = await datasette.client.get(
-        "/-/enrich/data/{}".format(encoded_table), cookies=cookies
+        f"/-/enrich/data/{encoded_table}", cookies=cookies
     )
     assert response1.status_code == 200
     assert (
-        '<a href="/-/enrich/data/{}/uppercasedemo">Convert to uppercase</a>'.format(
-            encoded_table
-        )
+        f'<a href="/-/enrich/data/{encoded_table}/uppercasedemo">Convert to uppercase</a>'
         in response1.text
     )
 
     response2 = await datasette.client.get(
-        "/-/enrich/data/{}/uppercasedemo".format(encoded_table), cookies=cookies
+        f"/-/enrich/data/{encoded_table}/uppercasedemo", cookies=cookies
     )
     assert "<h2>Convert to uppercase</h2>" in response2.text
 
@@ -86,13 +84,13 @@ async def test_uppercase_plugin(datasette, is_root, table):
     assert not hasattr(datasette, "_initialize_called_with")
 
     response3 = await datasette.client.post(
-        "/-/enrich/data/{}/uppercasedemo".format(encoded_table),
+        f"/-/enrich/data/{encoded_table}/uppercasedemo",
         cookies=cookies,
         data={"columns": "s", "csrftoken": csrftoken},
     )
     assert response3.status_code == 302
     assert response3.headers["location"].startswith(
-        "/data/{}?_enrichment_job=".format(encoded_table)
+        f"/data/{encoded_table}?_enrichment_job="
     )
     # It should be queued up
     job_id = response3.headers["location"].split("=")[-1]
@@ -175,10 +173,7 @@ async def test_row_actions(datasette, path, expected_path):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response = await datasette.client.get(path, cookies=cookies)
     assert response.status_code == 200
-    assert (
-        '<a href="/-/enrich/data/{}">Enrich this row'.format(expected_path)
-        in response.text
-    )
+    assert f'<a href="/-/enrich/data/{expected_path}">Enrich this row' in response.text
     # And check that page offers to enrich just one row
     enrich_path = "/-/enrich/data/" + response.text.split('<a href="/-/enrich/data/')[
         1
@@ -354,14 +349,14 @@ async def test_enrichment_with_errors(datasette):
 
     # Check that the job status API works
     response3 = await datasette.client.get(
-        "/-/enrichment-jobs/data/{}".format(job_id), cookies=cookies
+        f"/-/enrichment-jobs/data/{job_id}", cookies=cookies
     )
     assert response3.status_code == 200
     data = response3.json()
     assert data == {
         "total": 50,
-        "title": "Job {}: 8 success then 2 errors, repeated".format(job_id),
-        "url": "/-/enrich/data/-/jobs/{}".format(job_id),
+        "title": f"Job {job_id}: 8 success then 2 errors, repeated",
+        "url": f"/-/enrich/data/-/jobs/{job_id}",
         "is_complete": True,
         "sections": [
             {"type": "error", "count": 2},
@@ -445,28 +440,28 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
 
     # Call the API and check that 10 are done
     response3 = await datasette.client.get(
-        "/-/enrichment-jobs/data/{}".format(job_id), cookies=cookies
+        f"/-/enrichment-jobs/data/{job_id}", cookies=cookies
     )
     assert response3.status_code == 200
     data = response3.json()
     assert data == {
         "total": 50,
         "title": "Job 1: Queue controlled enrichment",
-        "url": "/-/enrich/data/-/jobs/{}".format(job_id),
+        "url": f"/-/enrich/data/-/jobs/{job_id}",
         "is_complete": False,
         "sections": [{"type": "success", "count": 3}],
     }
 
     # Now pause it
     response4 = await datasette.client.post(
-        "/-/enrich/data/-/jobs/{}/pause".format(job_id), cookies=cookies, data=form_data
+        f"/-/enrich/data/-/jobs/{job_id}/pause", cookies=cookies, data=form_data
     )
     assert response4.status_code == 302
     assert get_status(datasette, job_id) == "paused"
 
     # And resume it
     response5 = await datasette.client.post(
-        "/-/enrich/data/-/jobs/{}/resume".format(job_id),
+        f"/-/enrich/data/-/jobs/{job_id}/resume",
         cookies=cookies,
         data=form_data,
     )
@@ -475,7 +470,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
 
     # And cancel it
     response6 = await datasette.client.post(
-        "/-/enrich/data/-/jobs/{}/cancel".format(job_id),
+        f"/-/enrich/data/-/jobs/{job_id}/cancel",
         cookies=cookies,
         data=form_data,
     )
@@ -565,7 +560,7 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
 
     # Resume it again
     await datasette.client.post(
-        "/-/enrich/data/-/jobs/{}/resume".format(job_id),
+        f"/-/enrich/data/-/jobs/{job_id}/resume",
         cookies=cookies,
         data=form_data,
     )
