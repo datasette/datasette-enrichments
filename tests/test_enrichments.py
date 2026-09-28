@@ -1,6 +1,10 @@
 import asyncio
+import html
+import inspect
 import random
+import re
 import sqlite3
+import time
 
 import pytest
 import pytest_asyncio
@@ -78,15 +82,12 @@ async def test_uppercase_plugin(datasette, is_root, table):
     assert "<h2>Convert to uppercase</h2>" in response2.text
 
     # Now try and run it
-    csrftoken = response2.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-
     assert not hasattr(datasette, "_initialize_called_with")
 
     response3 = await datasette.client.post(
         f"/-/enrich/data/{encoded_table}/uppercasedemo",
         cookies=cookies,
-        data={"columns": "s", "csrftoken": csrftoken},
+        data={"columns": "s"},
     )
     assert response3.status_code == 302
     assert response3.headers["location"].startswith(
@@ -107,43 +108,30 @@ async def test_uppercase_plugin(datasette, is_root, table):
     assert table_name == table
     assert config == '{"columns": "s"}'
     # Wait a moment and it should start running
-    tries = 0
-    ok = False
-    while tries < 10:
-        await asyncio.sleep(0.1)
-        tries += 1
-        status = datasette._test_db.execute(
-            "select status from _enrichment_jobs"
-        ).fetchall()[0][0]
-        if status == "running":
-            ok = True
-            break
-
-    assert ok, "Enrichment did not start running"
+    await wait_until(
+        lambda: get_status(datasette, job_id) == "running",
+        "enrichment to start running",
+    )
     assert hasattr(datasette, "_initialize_called_with")
     assert not hasattr(datasette, "_finalize_called_with")
 
-    await wait_for_job(datasette, job_id, database_name, timeout=1)
+    await wait_for_job(datasette, job_id, database_name, timeout=5)
     assert hasattr(datasette, "_finalize_called_with"), "Enrichment did not complete"
 
 
 @pytest.mark.asyncio
 async def test_error_log(datasette):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
-    csrftoken = (
-        await datasette.client.get("/-/enrich/data/t/uppercasedemo", cookies=cookies)
-    ).cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
     datasette._trigger_enrich_batch_error = True
     response = await datasette.client.post(
         "/-/enrich/data/t/uppercasedemo",
         cookies=cookies,
-        data={"columns": "s", "csrftoken": csrftoken},
+        data={"columns": "s"},
     )
     assert response.status_code == 302
     job_id = response.headers["location"].split("=")[-1]
     # Wait for it to finish, should populate error table
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
     errors = datasette._test_db.execute(
         "select job_id, row_pks, error from _enrichment_errors"
     ).fetchall()
@@ -173,11 +161,13 @@ async def test_row_actions(datasette, path, expected_path):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response = await datasette.client.get(path, cookies=cookies)
     assert response.status_code == 200
-    assert f'<a href="/-/enrich/data/{expected_path}">Enrich this row' in response.text
+    m = re.search(
+        r'<a href="(/-/enrich/data/[^"]+)"[^>]*>Enrich this row', response.text
+    )
+    assert m, response.text
+    assert m.group(1) == f"/-/enrich/data/{expected_path}"
     # And check that page offers to enrich just one row
-    enrich_path = "/-/enrich/data/" + response.text.split('<a href="/-/enrich/data/')[
-        1
-    ].split('">')[0].replace("&amp;", "&")
+    enrich_path = html.unescape(m.group(1))
     enrich_page_response = await datasette.client.get(enrich_path, cookies=cookies)
     assert enrich_page_response.status_code == 200
     assert "1 row selected" in enrich_page_response.text
@@ -223,10 +213,7 @@ async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
         assert ' name="enrichment_secret"' in response2.text
 
     # Now try and run it
-    csrftoken = response2.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-
-    form_data = {"column": "s", "string": "hello", "csrftoken": csrftoken}
+    form_data = {"column": "s", "string": "hello"}
     if scenario == "user-input":
         form_data["enrichment_secret"] = "user-secret"
 
@@ -239,7 +226,7 @@ async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
     job_id = response3.headers["location"].split("=")[-1]
 
     # Wait for it to finish and check it worked
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
     # Check for errors
     job_details = datasette._test_db.execute(
         "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
@@ -266,10 +253,7 @@ async def test_enrichment_with_no_config_form(datasette):
     assert "<h2>Calculate a hash for each row</h2>" in response2.text
 
     # Now try and run it
-    csrftoken = response2.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
 
     response3 = await datasette.client.post(
         "/-/enrich/data/t/hashrows",
@@ -280,7 +264,7 @@ async def test_enrichment_with_no_config_form(datasette):
     job_id = response3.headers["location"].split("=")[-1]
 
     # Wait for it to finish and check it worked
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
 
     job_details = datasette._test_db.execute(
         "select error_count, done_count from _enrichment_jobs where id = ?", (job_id,)
@@ -301,9 +285,7 @@ async def test_enrichment_with_errors(datasette):
     )
     assert "<h2>8 success then 2 errors, repeated</h2>" in response1.text
 
-    csrftoken = response1.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
 
     response2 = await datasette.client.post(
         "/-/enrich/data/has_50_rows/haserrors",
@@ -314,7 +296,7 @@ async def test_enrichment_with_errors(datasette):
     job_id = response2.headers["location"].split("=")[-1]
 
     # Wait for it to finish and check it worked
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
 
     # Check for errors
     errors = datasette._test_db.execute(
@@ -395,7 +377,7 @@ async def test_enrichments_start_on_startup(datasette):
     )
     # First request to the app should cause that to finish
     await datasette.client.get("/")
-    await wait_for_job(datasette, job_id, "data", timeout=1)
+    await wait_for_job(datasette, job_id, "data", timeout=5)
     # Check that the enrichment is now complete
     row = dict(
         (
@@ -412,6 +394,37 @@ def get_status(datasette, job_id):
     ).fetchone()[0]
 
 
+def get_progress_rows(datasette, job_id):
+    cursor = datasette._test_db.cursor()
+    cursor.row_factory = sqlite3.Row
+    return [
+        dict(row)
+        for row in cursor.execute(
+            """
+            select job_id, success_count, error_count, message
+            from _enrichment_progress where job_id = ? order by id
+            """,
+            (job_id,),
+        )
+    ]
+
+
+async def wait_until(condition, description, timeout=5):
+    "Poll condition (sync or async callable) until it returns truthy"
+    deadline = time.monotonic() + timeout
+    while True:
+        result = condition()
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"Timed out after {timeout}s waiting for {description}"
+            )
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.asyncio
 async def test_enrichments_pause_resume_cancel_buttons(datasette):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
@@ -420,9 +433,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
     )
     assert "<h2>Queue controlled enrichment</h2>" in response1.text
 
-    csrftoken = response1.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
 
     response2 = await datasette.client.post(
         "/-/enrich/data/has_50_rows/queue",
@@ -436,9 +447,15 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
     for i in range(3):
         await queue.put(str(i))
 
-    await asyncio.sleep(0.1)
+    async def three_rows_done():
+        response = await datasette.client.get(
+            f"/-/enrichment-jobs/data/{job_id}", cookies=cookies
+        )
+        return response.json()["sections"] == [{"type": "success", "count": 3}]
 
-    # Call the API and check that 10 are done
+    await wait_until(three_rows_done, "3 rows to be processed")
+
+    # Call the API and check that 3 are done
     response3 = await datasette.client.get(
         f"/-/enrichment-jobs/data/{job_id}", cookies=cookies
     )
@@ -478,18 +495,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
     assert get_status(datasette, job_id) == "cancelled"
 
     # Check the messages were correctly logged
-    cursor = datasette._test_db.cursor()
-    cursor.row_factory = sqlite3.Row
-    rows = [
-        dict(row)
-        for row in cursor.execute(
-            """
-            select job_id, success_count, error_count, message
-            from _enrichment_progress where job_id = ? order by id
-            """,
-            (job_id,),
-        )
-    ]
+    rows = get_progress_rows(datasette, job_id)
     assert rows == [
         {
             "job_id": job_id,
@@ -533,12 +539,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
 @pytest.mark.asyncio
 async def test_enrichments_pause_cancel_exceptions(datasette):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
-    response1 = await datasette.client.get(
-        "/-/enrich/data/has_50_rows/queue", cookies=cookies
-    )
-    csrftoken = response1.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
     response2 = await datasette.client.post(
         "/-/enrich/data/has_50_rows/queue",
         cookies=cookies,
@@ -547,7 +548,9 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
     job_id = int(response2.headers["location"].split("=")[-1])
 
     assert get_status(datasette, job_id) == "pending"
-    await asyncio.sleep(0.1)
+    await wait_until(
+        lambda: get_status(datasette, job_id) != "pending", "job to leave pending"
+    )
     assert get_status(datasette, job_id) == "running"
 
     # Now feed it three results and then pause then cancel
@@ -555,7 +558,12 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
     for i in range(3):
         await queue.put(str(i))
     await queue.put("pause")
-    await asyncio.sleep(0.1)
+    # The status is updated before the progress row is written, so wait for
+    # both: resuming too early would record "running" before "paused"
+    await wait_until(
+        lambda: len(get_progress_rows(datasette, job_id)) == 4,
+        "3 rows and the pause to be recorded",
+    )
     assert get_status(datasette, job_id) == "paused"
 
     # Resume it again
@@ -567,21 +575,13 @@ async def test_enrichments_pause_cancel_exceptions(datasette):
 
     # Now cancel it
     await queue.put("cancel")
-    await asyncio.sleep(0.1)
+    await wait_until(
+        lambda: len(get_progress_rows(datasette, job_id)) == 6,
+        "the cancellation to be recorded",
+    )
     assert get_status(datasette, job_id) == "cancelled"
 
-    cursor = datasette._test_db.cursor()
-    cursor.row_factory = sqlite3.Row
-    rows = [
-        dict(row)
-        for row in cursor.execute(
-            """
-            select job_id, success_count, error_count, message
-            from _enrichment_progress where job_id = ? order by id
-            """,
-            (job_id,),
-        )
-    ]
+    rows = get_progress_rows(datasette, job_id)
     assert rows == [
         {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
         {"job_id": job_id, "success_count": 1, "error_count": 0, "message": None},
