@@ -1,5 +1,7 @@
 import asyncio
+import html
 import random
+import re
 import sqlite3
 
 import pytest
@@ -78,15 +80,12 @@ async def test_uppercase_plugin(datasette, is_root, table):
     assert "<h2>Convert to uppercase</h2>" in response2.text
 
     # Now try and run it
-    csrftoken = response2.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-
     assert not hasattr(datasette, "_initialize_called_with")
 
     response3 = await datasette.client.post(
         f"/-/enrich/data/{encoded_table}/uppercasedemo",
         cookies=cookies,
-        data={"columns": "s", "csrftoken": csrftoken},
+        data={"columns": "s"},
     )
     assert response3.status_code == 302
     assert response3.headers["location"].startswith(
@@ -130,15 +129,11 @@ async def test_uppercase_plugin(datasette, is_root, table):
 @pytest.mark.asyncio
 async def test_error_log(datasette):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
-    csrftoken = (
-        await datasette.client.get("/-/enrich/data/t/uppercasedemo", cookies=cookies)
-    ).cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
     datasette._trigger_enrich_batch_error = True
     response = await datasette.client.post(
         "/-/enrich/data/t/uppercasedemo",
         cookies=cookies,
-        data={"columns": "s", "csrftoken": csrftoken},
+        data={"columns": "s"},
     )
     assert response.status_code == 302
     job_id = response.headers["location"].split("=")[-1]
@@ -173,11 +168,13 @@ async def test_row_actions(datasette, path, expected_path):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     response = await datasette.client.get(path, cookies=cookies)
     assert response.status_code == 200
-    assert f'<a href="/-/enrich/data/{expected_path}">Enrich this row' in response.text
+    m = re.search(
+        r'<a href="(/-/enrich/data/[^"]+)"[^>]*>Enrich this row', response.text
+    )
+    assert m, response.text
+    assert m.group(1) == f"/-/enrich/data/{expected_path}"
     # And check that page offers to enrich just one row
-    enrich_path = "/-/enrich/data/" + response.text.split('<a href="/-/enrich/data/')[
-        1
-    ].split('">')[0].replace("&amp;", "&")
+    enrich_path = html.unescape(m.group(1))
     enrich_page_response = await datasette.client.get(enrich_path, cookies=cookies)
     assert enrich_page_response.status_code == 200
     assert "1 row selected" in enrich_page_response.text
@@ -223,10 +220,7 @@ async def test_enrichment_using_secret(datasette, scenario, monkeypatch):
         assert ' name="enrichment_secret"' in response2.text
 
     # Now try and run it
-    csrftoken = response2.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-
-    form_data = {"column": "s", "string": "hello", "csrftoken": csrftoken}
+    form_data = {"column": "s", "string": "hello"}
     if scenario == "user-input":
         form_data["enrichment_secret"] = "user-secret"
 
@@ -266,10 +260,7 @@ async def test_enrichment_with_no_config_form(datasette):
     assert "<h2>Calculate a hash for each row</h2>" in response2.text
 
     # Now try and run it
-    csrftoken = response2.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
 
     response3 = await datasette.client.post(
         "/-/enrich/data/t/hashrows",
@@ -301,9 +292,7 @@ async def test_enrichment_with_errors(datasette):
     )
     assert "<h2>8 success then 2 errors, repeated</h2>" in response1.text
 
-    csrftoken = response1.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
 
     response2 = await datasette.client.post(
         "/-/enrich/data/has_50_rows/haserrors",
@@ -420,9 +409,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
     )
     assert "<h2>Queue controlled enrichment</h2>" in response1.text
 
-    csrftoken = response1.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
 
     response2 = await datasette.client.post(
         "/-/enrich/data/has_50_rows/queue",
@@ -533,12 +520,7 @@ async def test_enrichments_pause_resume_cancel_buttons(datasette):
 @pytest.mark.asyncio
 async def test_enrichments_pause_cancel_exceptions(datasette):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
-    response1 = await datasette.client.get(
-        "/-/enrich/data/has_50_rows/queue", cookies=cookies
-    )
-    csrftoken = response1.cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
-    form_data = {"csrftoken": csrftoken}
+    form_data = {}
     response2 = await datasette.client.post(
         "/-/enrich/data/has_50_rows/queue",
         cookies=cookies,
