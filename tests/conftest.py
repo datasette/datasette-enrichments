@@ -9,8 +9,35 @@ from datasette import hookimpl
 from datasette.app import Datasette
 from datasette.database import Database
 from datasette.plugins import pm
+
+# Importing the fixture names registers them: session-scoped autouse
+# tracer/meter providers with in-memory export (skipped when the SDK is not
+# installed), and a per-test reset that drains them. Tests take otel_spans /
+# otel_metrics.
+from datasette.telemetry_testing import (  # noqa: F401
+    MetricsCollector,
+    otel_meter_provider,
+    otel_metrics,
+    otel_provider,
+    otel_reset,
+    otel_spans,
+)
 from wtforms import Form, SelectField, StringField
 from wtforms.widgets import CheckboxInput, ListWidget
+
+
+def pytest_collection_modifyitems(items):
+    # These tests shell out to a fresh interpreter, and the kit documents a
+    # macOS/CPython 3.13 fork+exec crash (SIGBUS) when subprocess-spawning
+    # tests run late in a thread-heavy process - so run them first, as
+    # Datasette's own conftest does.
+    subprocess_tests = {
+        "test_package_never_imports_the_sdk",
+        "test_import_without_provider_is_noop",
+    }
+    front = [item for item in items if item.name in subprocess_tests]
+    for item in reversed(front):
+        items.insert(0, items.pop(items.index(item)))
 
 
 class MultiCheckboxField(SelectField):
