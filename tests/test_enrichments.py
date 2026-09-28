@@ -822,3 +822,72 @@ async def test_no_new_job_tasks_once_shutdown_starts(datasette):
     await _start_job(datasette, job_id)
     assert _live_job_tasks(datasette) == []
     assert get_status(datasette, job_id) == "pending"
+
+
+@pytest.mark.asyncio
+async def test_job_with_no_matching_rows_finishes(datasette):
+    # A filter that matches nothing used to leave the job 'running' forever,
+    # without calling finalize()
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/t/uppercasedemo?s=no-such-value",
+        cookies=cookies,
+        data={"columns": "s"},
+    )
+    assert response.status_code == 302
+    job_id = int(response.headers["location"].split("=")[-1])
+    filter_querystring, row_count = datasette._test_db.execute(
+        "select filter_querystring, row_count from _enrichment_jobs where id = ?",
+        (job_id,),
+    ).fetchone()
+    assert filter_querystring == "s=no-such-value"
+    assert row_count == 0
+    registry = datasette._enrichment_job_tasks
+    tasks = list(registry.values())
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+    assert get_status(datasette, job_id) == "finished"
+    finished_at, done_count = datasette._test_db.execute(
+        "select finished_at, done_count from _enrichment_jobs where id = ?",
+        (job_id,),
+    ).fetchone()
+    assert finished_at is not None
+    assert done_count == 0
+    assert hasattr(datasette, "_finalize_called_with")
+    assert datasette._finalize_called_with[2] == "t"
+    # wait_for_job() returns just before the task itself finishes
+    await asyncio.wait(tasks, timeout=5)
+    assert registry == {}
+
+
+@pytest.mark.asyncio
+async def test_job_finishes_if_remaining_rows_vanish_mid_job(datasette):
+    # The first batch returns a next cursor, but by the time the loop fetches
+    # the next batch the remaining rows have gone
+    datasette._enrich_gate = asyncio.Event()
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/countbatches", cookies=cookies, data={}
+    )
+    assert response.status_code == 302
+    job_id = int(response.headers["location"].split("=")[-1])
+    registry = datasette._enrichment_job_tasks
+    tasks = list(registry.values())
+    await wait_until(
+        lambda: _first_batch_in_flight(datasette, job_id), "first batch to start"
+    )
+    # The first batch (ids 1-10) is held on the gate: delete everything after it
+    with datasette._test_db:
+        datasette._test_db.execute("delete from has_50_rows where id > 10")
+    datasette._enrich_gate.set()
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+
+    assert get_status(datasette, job_id) == "finished"
+    finished_at, done_count = datasette._test_db.execute(
+        "select finished_at, done_count from _enrichment_jobs where id = ?",
+        (job_id,),
+    ).fetchone()
+    assert finished_at is not None
+    assert done_count == 10
+    assert datasette._enrich_counts == {i: 1 for i in range(1, 11)}
+    await asyncio.wait(tasks, timeout=5)
+    assert registry == {}
