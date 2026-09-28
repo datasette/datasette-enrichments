@@ -13,6 +13,7 @@ Your enrichment plugin should register new enrichments using the `register_enric
 ```python
 from datasette import hookimpl
 
+
 @hookimpl
 def register_enrichments():
     return [MyEnrichment()]
@@ -28,14 +29,10 @@ def register_enrichments(datasette):
         db = datasette.get_database("mydb")
         settings = [
             row["setting"]
-            for row in await db.execute(
-                "select setting from special_settings"
-            )
+            for row in await db.execute("select setting from special_settings")
         ]
-        return [
-            MyEnrichment(setting)
-            for setting in settings
-        ]
+        return [MyEnrichment(setting) for setting in settings]
+
     return inner
 ```
 
@@ -45,6 +42,7 @@ Most of the code you write will be in a subclass of `Enrichment`:
 
 ```python
 from datasette_enrichments import Enrichment
+
 
 class MyEnrichment(Enrichment):
     name = "Name of My Enrichment"
@@ -239,6 +237,7 @@ To define a secret that your plugin needs, add the following code:
 from datasette_enrichments import Enrichment
 from datasette_secrets import Secret
 
+
 # Then later in your enrichments class
 class TrainEnthusiastsEnrichment(Enrichment):
     name = "Train Enthusiasts"
@@ -248,7 +247,7 @@ class TrainEnthusiastsEnrichment(Enrichment):
         name="TRAIN_ENTHUSIASTS_API_KEY",
         description="An API key from train-enthusiasts.doesnt.exist",
         obtain_url="https://train-enthusiasts.doesnt.exist/api-keys",
-        obtain_label="Get an API key"
+        obtain_label="Get an API key",
     )
 ```
 Configuring your enrichment like this will result in the following behavior:
@@ -278,6 +277,7 @@ from datasette_enrichments.utils import wait_for_job
 import pytest
 import sqlite3
 
+
 @pytest.mark.asyncio
 async def test_enrichment(tmpdir):
     db_path = str(tmpdir / "demo.db")
@@ -292,8 +292,7 @@ async def test_enrichment(tmpdir):
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
     csrftoken = (
         await datasette.client.get(
-            "/-/enrich/demo/news/name-of-enrichment",
-            cookies=cookies
+            "/-/enrich/demo/news/name-of-enrichment", cookies=cookies
         )
     ).cookies["ds_csrftoken"]
     cookies["ds_csrftoken"] = csrftoken
@@ -323,7 +322,7 @@ async def test_enrichment(tmpdir):
     assert rows == [
         {"body": "example a transformed"},
         {"body": "example b transformed"},
-        {"body": "example c transformed"}
+        {"body": "example c transformed"},
     ]
 ```
 

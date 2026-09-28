@@ -16,10 +16,10 @@
 # Run linters
 @lint:
   echo "Linters..."
-  echo "  Black"
-  pipenv run black . --check
-  echo "  ruff"
-  pipenv run ruff .
+  echo "  ruff check"
+  pipenv run ruff check .
+  echo "  ruff format"
+  pipenv run ruff format --check .
 
 
 # Serve live docs on localhost:8000
@@ -27,14 +27,14 @@
   rm -rf docs/_build
   cd docs && pipenv run make livehtml
 
-# Apply Black
-@black:
-  pipenv run black .
+# Apply ruff format
+@format:
+  pipenv run ruff format .
 
 # Run automatic fixes
 @fix:
-  pipenv run ruff . --fix
-  pipenv run black .
+  pipenv run ruff check . --fix
+  pipenv run ruff format .
 
 # Push commit if tests pass
 @push: test lint

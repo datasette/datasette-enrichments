@@ -16,7 +16,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "black", "ruff", "packaging"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "packaging",
+    # Pinned: ruff's default rule set changes between releases
+    "ruff==0.16.9",
+]
 
 [build-system]
 requires = ["setuptools"]
@@ -40,6 +46,10 @@ docs = [
     "myst-parser",
     "cogapp"
 ]
+
+[tool.ruff]
+# Ruff's default lint rules and black-compatible formatter settings;
+# target-version is inferred from requires-python.
 
 [tool.setuptools.packages.find]
 where = ["."]

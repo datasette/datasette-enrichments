@@ -886,7 +886,9 @@ class JobProgress extends HTMLElement {
 customElements.define('job-progress', JobProgress);
 """
 
-POLL_JS = CUSTOM_ELEMENT_JS + """
+POLL_JS = (
+    CUSTOM_ELEMENT_JS
+    + """
 async function initEnrichmentProgress(jobs) {
   try {
     // Validate jobs argument
@@ -927,6 +929,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initEnrichmentProgress({{ jobs }});
 });
 """
+)
 
 _restart_running_jobs_lock = asyncio.Lock()
 
@@ -945,10 +948,12 @@ async def _restart_running_jobs_task(datasette):
             continue
 
         # Find jobs marked as 'running'
-        running_jobs = (await db.execute("""
+        running_jobs = (
+            await db.execute("""
             SELECT * FROM _enrichment_jobs
             WHERE status = 'running'
-            """)).rows
+            """)
+        ).rows
 
         # Grab all known enrichments
         all_enrichments = await get_enrichments(datasette)
