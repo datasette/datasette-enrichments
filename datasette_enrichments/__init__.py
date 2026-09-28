@@ -444,9 +444,32 @@ class Enrichment(ABC):
         registry = _job_tasks(datasette)
         key = (db.name, job_id)
 
+        async def complete(row_count: int):
+            # Mark the job finished, then run finalize(). If finalize() raises,
+            # run_enrichment() turns the job into 'error'.
+            await db.execute_write(
+                """
+                update _enrichment_jobs
+                set
+                    finished_at = datetime('now'),
+                    status = 'finished',
+                    done_count = done_count + ?
+                where id = ?
+                """,
+                (row_count, job["id"]),
+            )
+            await async_call_with_supported_arguments(
+                self.finalize,
+                datasette=datasette,
+                db=db,
+                table=job["table_name"],
+                config=json.loads(job["config"]),
+            )
+
         async def run_batches() -> str:
-            # Returns "finished", "stopped" (status no longer 'running', or the
-            # enrichment raised Pause/Cancel) or "empty" (no rows returned)
+            # Returns "finished" (no rows left, including a fetch that returns
+            # no rows at all) or "stopped" (status no longer 'running', or the
+            # enrichment raised Pause/Cancel)
             next_cursor = job["next_cursor"]
 
             # Set state to running - unless a Pause or Cancel landed since the
@@ -485,7 +508,10 @@ class Enrichment(ABC):
                 )
                 rows = response.json()["rows"]
                 if not rows:
-                    return "empty"
+                    # Filter matched nothing, or the remaining rows were deleted
+                    # (or stopped matching) since the previous batch
+                    await complete(0)
+                    return "finished"
                 # Enrich batch
                 pks = await db.primary_keys(job["table_name"])
                 try:
@@ -525,25 +551,7 @@ class Enrichment(ABC):
                         (next_cursor, len(rows), job["id"]),
                     )
                 else:
-                    # Mark complete
-                    await db.execute_write(
-                        """
-                        update _enrichment_jobs
-                        set
-                            finished_at = datetime('now'),
-                            status = 'finished',
-                            done_count = done_count + ?
-                        where id = ?
-                        """,
-                        (len(rows), job["id"]),
-                    )
-                    await async_call_with_supported_arguments(
-                        self.finalize,
-                        datasette=datasette,
-                        db=db,
-                        table=job["table_name"],
-                        config=json.loads(job["config"]),
-                    )
+                    await complete(len(rows))
                     return "finished"
 
         async def run_enrichment():
@@ -585,7 +593,6 @@ class Enrichment(ABC):
                 elif status in TERMINAL_STATUSES:
                     # e.g. cancelled - wake anything in wait_for_job()
                     await mark_job_complete(datasette, job_id, db.name)
-            # "empty" (no rows at all) leaves the job as it was, as before
 
         # The live-task check and the registry insert must not have an await
         # between them, or two concurrent callers (Resume vs. restart, Resume
