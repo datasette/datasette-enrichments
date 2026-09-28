@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 import json
+import logging
 import secrets
-import sys
 import time
 import traceback
 import urllib
@@ -26,13 +26,15 @@ from wtforms import PasswordField
 from wtforms.validators import DataRequired
 
 from . import hookspecs, views
-from .utils import mark_job_complete, pks_for_rows
+from .utils import TERMINAL_STATUSES, mark_job_complete, pks_for_rows
 
 if TYPE_CHECKING:
     from datasette.app import Datasette
     from datasette.database import Database
 
 pm.add_hookspecs(hookspecs)
+
+logger = logging.getLogger("datasette_enrichments")
 
 
 IdType = int | str | tuple[int | str, ...]
@@ -171,6 +173,38 @@ def register_secrets():
 
 class SecretError(Exception):
     pass
+
+
+def _job_tasks(datasette) -> dict:
+    # (database_name, job_id) -> asyncio.Task for every in-process job loop.
+    # Holding the task here keeps it strongly referenced until it finishes.
+    # This only prevents duplicate loops within one process: two Datasette
+    # processes sharing a database can still both run the same job.
+    if not hasattr(datasette, "_enrichment_job_tasks"):
+        datasette._enrichment_job_tasks = {}
+    return datasette._enrichment_job_tasks
+
+
+def _forget_job_task(registry: dict, key: tuple, task: asyncio.Task):
+    # Only remove the task if it is still the registered one: a replacement
+    # loop may already have been registered under the same key
+    if registry.get(key) is task:
+        del registry[key]
+
+
+def _job_task_done(registry: dict, key: tuple):
+    def callback(task: asyncio.Task):
+        _forget_job_task(registry, key, task)
+        # run_enrichment() handles its own errors, so this only fires if that
+        # handling itself failed - log it rather than lose it
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(
+                "Enrichment task %s crashed",
+                task.get_name(),
+                exc_info=task.exception(),
+            )
+
+    return callback
 
 
 class Enrichment(ABC):
@@ -397,26 +431,38 @@ class Enrichment(ABC):
     async def start_enrichment_in_process(
         self, datasette: "Datasette", db: "Database", job_id: int
     ):
-        loop = asyncio.get_event_loop()
         job_row = (
             await db.execute("select * from _enrichment_jobs where id = ?", (job_id,))
         ).first()
         if not job_row:
             return
         job = dict(job_row)
+        # Never restart a job that was paused, cancelled or has already finished
+        # (e.g. the restart task acting on a stale snapshot)
+        if job["status"] not in ("pending", "running"):
+            return
+        registry = _job_tasks(datasette)
+        key = (db.name, job_id)
 
-        async def run_enrichment():
+        async def run_batches() -> str:
+            # Returns "finished", "stopped" (status no longer 'running', or the
+            # enrichment raised Pause/Cancel) or "empty" (no rows returned)
             next_cursor = job["next_cursor"]
 
-            # Set state to running
-            await db.execute_write(
-                """
-                update _enrichment_jobs
-                set status = 'running'
-                where id = ?
-                """,
-                (job["id"],),
-            )
+            # Set state to running - unless a Pause or Cancel landed since the
+            # status check in start_enrichment_in_process(), in which case it wins
+            def claim(conn):
+                return conn.execute(
+                    """
+                    update _enrichment_jobs
+                    set status = 'running'
+                    where id = ? and status in ('pending', 'running')
+                    """,
+                    (job["id"],),
+                ).rowcount
+
+            if not await db.execute_write_fn(claim):
+                return "stopped"
             while True:
                 # Check something else hasn't set the state to paused or cancelled
                 job_row = (
@@ -425,7 +471,7 @@ class Enrichment(ABC):
                     )
                 ).first()
                 if not job_row or job_row[0] != "running":
-                    break
+                    return "stopped"
                 # Get next batch
                 table_path = datasette.urls.table(
                     job["database_name"], job["table_name"], format="json"
@@ -439,7 +485,7 @@ class Enrichment(ABC):
                 )
                 rows = response.json()["rows"]
                 if not rows:
-                    break
+                    return "empty"
                 # Enrich batch
                 pks = await db.primary_keys(job["table_name"])
                 try:
@@ -459,10 +505,10 @@ class Enrichment(ABC):
                     await record_progress(db, job_id, success_count, 0)
                 except self.Cancel as ex:
                     await set_job_status(db, job_id, "cancelled", message=str(ex))
-                    return
+                    return "stopped"
                 except self.Pause as ex:
                     await set_job_status(db, job_id, "paused", message=str(ex))
-                    return
+                    return "stopped"
                 except Exception as ex:  # noqa: BLE001
                     await self.log_error(db, job_id, pks_for_rows(rows, pks), str(ex))
                 # Update next_cursor
@@ -498,10 +544,65 @@ class Enrichment(ABC):
                         table=job["table_name"],
                         config=json.loads(job["config"]),
                     )
-                    await mark_job_complete(datasette, job["id"], job["database_name"])
-                    break
+                    return "finished"
 
-        loop.create_task(run_enrichment())
+        async def run_enrichment():
+            # asyncio.CancelledError (shutdown) is deliberately not caught: the
+            # job stays 'running' in the DB and is resumed on the next start
+            try:
+                outcome = await run_batches()
+            except Exception as ex:
+                # Anything that escaped the per-batch error handling, e.g. a DB
+                # error or a failing finalize(). Policy: mark the job 'error'
+                # even if it was already set to 'finished' before finalize()
+                # ran, so waiters wake up and the failure is visible in the UI.
+                logger.exception(
+                    "Enrichment job %s in database %s failed", job_id, db.name
+                )
+                try:
+                    # If this write fails too, that exception is logged again by
+                    # the done-callback and the status stays 'running'; acceptable
+                    await set_job_status(db, job_id, "error", message=type(ex).__name__)
+                finally:
+                    await mark_job_complete(datasette, job_id, db.name)
+                return
+            if outcome == "finished":
+                await mark_job_complete(datasette, job_id, db.name)
+            elif outcome == "stopped":
+                # We stopped because the status was not 'running'. A Resume may
+                # have set it back to 'running' after we checked, but seen this
+                # task still registered and so not started a new loop. Close
+                # that window: deregister first, then re-read the status.
+                _forget_job_task(registry, key, asyncio.current_task())
+                row = (
+                    await db.execute(
+                        "select status from _enrichment_jobs where id = ?", (job_id,)
+                    )
+                ).first()
+                status = row[0] if row else None
+                if status == "running":
+                    await self.start_enrichment_in_process(datasette, db, job_id)
+                elif status in TERMINAL_STATUSES:
+                    # e.g. cancelled - wake anything in wait_for_job()
+                    await mark_job_complete(datasette, job_id, db.name)
+            # "empty" (no rows at all) leaves the job as it was, as before
+
+        # The live-task check and the registry insert must not have an await
+        # between them, or two concurrent callers (Resume vs. restart, Resume
+        # vs. a stopping loop) could both start a loop for the same job.
+        if getattr(datasette, "_enrichment_shutting_down", False):
+            # The shutdown hook has already taken its snapshot of tasks to cancel
+            return
+        existing = registry.get(key)
+        if existing is not None and not existing.done():
+            # A loop is already running this job; it picks up the new status
+            # at its next check
+            return
+        task = asyncio.create_task(
+            run_enrichment(), name=f"enrichment-{db.name}-{job_id}"
+        )
+        registry[key] = task
+        task.add_done_callback(_job_task_done(registry, key))
 
 
 @hookimpl
@@ -931,8 +1032,6 @@ document.addEventListener('DOMContentLoaded', () => {
 """
 )
 
-_restart_running_jobs_lock = asyncio.Lock()
-
 
 async def _restart_running_jobs_task(datasette):
     # For each database known to Datasette, look for running jobs
@@ -969,33 +1068,42 @@ async def _restart_running_jobs_task(datasette):
                 # Resume from wherever it left off
                 await enrichment.start_enrichment_in_process(datasette, db, job_id)
             else:
-                print(f"Unknown enrichment: {enrichment_slug}", file=sys.stderr)
-
-
-async def restart_running_jobs(datasette):
-    """
-    Start the background task if it hasn't been started yet.
-    Uses a lock to ensure the task is only started once.
-    """
-    if hasattr(datasette, "_restart_running_jobs_task_started"):
-        return
-    # Lock to avoid race condition if two requests come in at once
-    async with _restart_running_jobs_lock:
-        if not hasattr(datasette, "_restart_running_jobs_task_started"):
-            datasette._restart_running_jobs_task_started = True
-            asyncio.create_task(_restart_running_jobs_task(datasette))
+                logger.warning(
+                    "Cannot resume job %s: unknown enrichment %s",
+                    job_id,
+                    enrichment_slug,
+                )
 
 
 @hookimpl
-def asgi_wrapper(datasette):
-    def wrap_with_task_starter(app):
-        async def wrapped_app(scope, receive, send):
-            await restart_running_jobs(datasette)
-            await app(scope, receive, send)
+def startup(datasette):
+    # Resume jobs left 'running' by a previous process. Core launches this
+    # once startup has finished (ASGI lifespan, or the first request on hosts
+    # without lifespan support) and keeps a reference to it.
+    datasette.add_background_task(
+        _restart_running_jobs_task, name="datasette-enrichments-restart"
+    )
 
-        return wrapped_app
 
-    return wrap_with_task_starter
+@hookimpl
+def shutdown(datasette):
+    # Cancel in-flight job loops. Their status stays 'running', so the restart
+    # task resumes them from next_cursor on the next start - which means the
+    # interrupted batch may be enriched again, as with any other restart.
+    # Only fires via ASGI lifespan; on other hosts the jobs are just killed.
+    async def inner():
+        # Stop anything (a stopping loop's self-restart, the restart task)
+        # from starting a new job task after we take this snapshot
+        datasette._enrichment_shutting_down = True
+        tasks = [t for t in _job_tasks(datasette).values() if not t.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            # Core waits for its own supervised tasks (5s grace) and then closes
+            # the databases; wait for ours, bounded, before that happens
+            await asyncio.wait(tasks, timeout=3)
+
+    return inner
 
 
 @hookimpl

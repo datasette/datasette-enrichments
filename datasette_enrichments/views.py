@@ -10,6 +10,8 @@ from datasette.utils import (
     tilde_decode,
 )
 
+from .utils import TERMINAL_STATUSES
+
 
 async def check_permissions(datasette, request, database):
     if not await datasette.allowed(
@@ -369,7 +371,7 @@ async def job_progress_view(datasette, request):
     if current_total:
         sections.append({"type": current, "count": current_total})
 
-    is_complete = (job["status"] in ("cancelled", "finished")) or (
+    is_complete = (job["status"] in TERMINAL_STATUSES) or (
         job["done_count"] >= job["row_count"]
     )
 
@@ -405,6 +407,8 @@ async def resume_job(datasette, db, job_id, message):
         ).first()
     )
     enrichment = all_enrichments[job["enrichment"]]
+    # No-op if this job's previous loop is still running (e.g. paused mid-batch):
+    # that loop sees 'running' at its next status check and carries on
     await enrichment.start_enrichment_in_process(datasette, db, job_id)
 
 

@@ -5,6 +5,12 @@ if TYPE_CHECKING:
     from datasette.app import Datasette
 
 
+# A job in one of these states will never run again. 'cancelled' counts: a
+# cancelled job cannot be resumed. 'error' is set when an exception escapes
+# the job loop (including a failing finalize()).
+TERMINAL_STATUSES = ("finished", "cancelled", "error")
+
+
 class WaitForJobException(Exception):
     def __init__(self, job_id, msg):
         self.job_id = job_id
@@ -33,7 +39,7 @@ async def wait_for_job(
     ).first()
     if job is None:
         raise WaitForJobException(job_id, "Job not found")
-    if job["status"] == "finished":
+    if job["status"] in TERMINAL_STATUSES:
         datasette._enrichment_completed_jobs.add((db.name, job_id))
         return
     # Otherwise wait for it to complete
