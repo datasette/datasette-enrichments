@@ -1,9 +1,12 @@
 import asyncio
 import hashlib
 import json
+import sqlite3
 
 import pytest
+import pytest_asyncio
 from datasette import hookimpl
+from datasette.app import Datasette
 from datasette.database import Database
 from datasette.plugins import pm
 from wtforms import Form, SelectField, StringField
@@ -13,6 +16,54 @@ from wtforms.widgets import CheckboxInput, ListWidget
 class MultiCheckboxField(SelectField):
     widget = ListWidget(prefix_label=False)
     option_widget = CheckboxInput()
+
+
+@pytest_asyncio.fixture
+async def datasette(tmpdir):
+    data = str(tmpdir / "data.db")
+    db = sqlite3.connect(data)
+    with db:
+        db.execute("create table t (id integer primary key, s text)")
+        db.execute("insert into t (s) values ('hello')")
+        db.execute("insert into t (s) values ('goodbye')")
+        db.execute("create table rowid_table (s text)")
+        db.execute("insert into rowid_table (s) values ('one')")
+        db.execute("insert into rowid_table (s) values ('two')")
+        db.execute("create table [foo/bar] (_id integer primary key, s text)")
+        db.execute("insert into [foo/bar] (_id, s) values (1, 'one')")
+        db.execute("insert into [foo/bar] (_id, s) values (2, 'two')")
+        db.execute(
+            "create table compound_pk_table (category text, name text, value integer, primary key (category, name))"
+        )
+        db.execute(
+            "insert into compound_pk_table (category, name, value) values ('dog', 'a', 34)"
+        )
+        db.execute("create table has_50_rows (id integer primary key, name text)")
+        for i in range(50):
+            db.execute("insert into has_50_rows (name) values (?)", (str(i),))
+
+    datasette = Datasette(
+        [data],
+        config={
+            "databases": {
+                # Lock down permissions to test
+                # https://github.com/datasette/datasette-enrichments/issues/13
+                "data": {"allow": {"id": "root"}}
+            },
+        },
+    )
+    datasette.root_enabled = True
+    datasette._test_db = db
+    await datasette.invoke_startup()
+    yield datasette
+    # Cancel and await any job loops still running (e.g. one blocked on the
+    # queue enrichment) while this test's event loop is still alive, rather
+    # than leaving them to be destroyed with the loop or finalized mid-way
+    # through a later test
+    tasks = list(getattr(datasette, "_enrichment_job_tasks", {}).values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
@@ -197,6 +248,50 @@ def load_uppercase_plugin():
             )
             datasette.enrichment_queue.task_done()
 
+    class CountBatches(Enrichment):
+        # Several batches of 10 rows. If the test sets datasette._enrich_gate
+        # (an asyncio.Event), each enrich_batch() call blocks on it, so a test
+        # can act while a batch is provably in flight. Records how many times
+        # each row was enriched and how many enrich_batch() calls overlapped.
+        name = "Count batches"
+        slug = "countbatches"
+        description = "Counts enrich_batch() calls per row"
+        batch_size = 10
+
+        async def enrich_batch(self, datasette, rows: list[dict], pks: list[str]):
+            if not hasattr(datasette, "_enrich_counts"):
+                datasette._enrich_counts = {}
+                datasette._enrich_in_flight = 0
+                datasette._enrich_max_in_flight = 0
+            datasette._enrich_in_flight += 1
+            datasette._enrich_max_in_flight = max(
+                datasette._enrich_max_in_flight, datasette._enrich_in_flight
+            )
+            try:
+                for row in rows:
+                    key = row[pks[0]]
+                    datasette._enrich_counts[key] = (
+                        datasette._enrich_counts.get(key, 0) + 1
+                    )
+                gate = getattr(datasette, "_enrich_gate", None)
+                if gate is not None:
+                    await gate.wait()
+                else:
+                    await asyncio.sleep(0)
+            finally:
+                datasette._enrich_in_flight -= 1
+
+    class FinalizeRaises(Enrichment):
+        name = "Finalize raises"
+        slug = "finalizeraises"
+        description = "An enrichment whose finalize() raises an exception"
+
+        async def enrich_batch(self, rows: list[dict]):
+            pass
+
+        async def finalize(self, datasette, db, table, config):
+            raise RuntimeError("finalize() failed")
+
     class EnrichmentsDemoPlugin:
         __name__ = "EnrichmentsDemoPlugin"
 
@@ -208,6 +303,8 @@ def load_uppercase_plugin():
                 HashRows(),
                 HasErrors(),
                 QueueControlledEnrichment(),
+                CountBatches(),
+                FinalizeRaises(),
             ]
 
     pm.register(EnrichmentsDemoPlugin(), name="undo_EnrichmentsDemoPlugin")

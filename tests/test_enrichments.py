@@ -7,53 +7,11 @@ import sqlite3
 import time
 
 import pytest
-import pytest_asyncio
 from datasette import version
-from datasette.app import Datasette
 from datasette.utils import tilde_encode
 from packaging.version import parse
 
 from datasette_enrichments.utils import wait_for_job
-
-
-@pytest_asyncio.fixture
-async def datasette(tmpdir):
-    data = str(tmpdir / "data.db")
-    db = sqlite3.connect(data)
-    with db:
-        db.execute("create table t (id integer primary key, s text)")
-        db.execute("insert into t (s) values ('hello')")
-        db.execute("insert into t (s) values ('goodbye')")
-        db.execute("create table rowid_table (s text)")
-        db.execute("insert into rowid_table (s) values ('one')")
-        db.execute("insert into rowid_table (s) values ('two')")
-        db.execute("create table [foo/bar] (_id integer primary key, s text)")
-        db.execute("insert into [foo/bar] (_id, s) values (1, 'one')")
-        db.execute("insert into [foo/bar] (_id, s) values (2, 'two')")
-        db.execute(
-            "create table compound_pk_table (category text, name text, value integer, primary key (category, name))"
-        )
-        db.execute(
-            "insert into compound_pk_table (category, name, value) values ('dog', 'a', 34)"
-        )
-        db.execute("create table has_50_rows (id integer primary key, name text)")
-        for i in range(50):
-            db.execute("insert into has_50_rows (name) values (?)", (str(i),))
-
-    datasette = Datasette(
-        [data],
-        config={
-            "databases": {
-                # Lock down permissions to test
-                # https://github.com/datasette/datasette-enrichments/issues/13
-                "data": {"allow": {"id": "root"}}
-            },
-        },
-    )
-    datasette.root_enabled = True
-    datasette._test_db = db
-    await datasette.invoke_startup()
-    return datasette
 
 
 @pytest.mark.asyncio
@@ -375,8 +333,9 @@ async def test_enrichments_start_on_startup(datasette):
     """,
         (job_id,),
     )
-    # First request to the app should cause that to finish
-    await datasette.client.get("/")
+    # No datasette.client request has been made yet, so background tasks have
+    # not launched. Launching them runs the restart task, which resumes the job
+    await datasette.start_background_tasks()
     await wait_for_job(datasette, job_id, "data", timeout=5)
     # Check that the enrichment is now complete
     row = dict(
@@ -386,6 +345,14 @@ async def test_enrichments_start_on_startup(datasette):
     )
     assert row["status"] == "finished"
     assert row["done_count"] == 50
+    # The restart ran as a supervised one-shot background task
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    tasks = (await datasette.client.get("/-/tasks.json", cookies=cookies)).json()
+    restart = [
+        t for t in tasks["tasks"] if t["name"] == "datasette-enrichments-restart"
+    ]
+    assert len(restart) == 1
+    assert restart[0]["state"] == "completed"
 
 
 def get_status(datasette, job_id):
@@ -616,3 +583,242 @@ async def test_action_registered(datasette):
     action = datasette.actions.get("enrichments")
     assert action.name == "enrichments"
     assert action.resource_class.__name__ == "DatabaseResource"
+
+
+def _live_job_tasks(datasette):
+    registry = getattr(datasette, "_enrichment_job_tasks", {})
+    return [t for t in registry.values() if not t.done()]
+
+
+async def _insert_job(datasette, status, enrichment="countbatches"):
+    # Insert a job row directly, without a datasette.client request (which
+    # would launch the restart background task)
+    from datasette_enrichments import ensure_tables
+
+    db = datasette.get_database("data")
+    await ensure_tables(db)
+    return (
+        await db.execute_write(
+            """
+            insert into _enrichment_jobs (
+                status, enrichment, database_name, table_name, filter_querystring,
+                config, done_count, error_count
+            ) values (?, ?, 'data', 'has_50_rows', '', '{}', 0, 0)
+            """,
+            (status, enrichment),
+        )
+    ).lastrowid
+
+
+async def _start_job(datasette, job_id, enrichment="countbatches"):
+    from datasette_enrichments import get_enrichments
+
+    enrichments = await get_enrichments(datasette)
+    await enrichments[enrichment].start_enrichment_in_process(
+        datasette, datasette.get_database("data"), job_id
+    )
+
+
+def _first_batch_in_flight(datasette, job_id):
+    return (
+        get_status(datasette, job_id) == "running"
+        and getattr(datasette, "_enrich_in_flight", 0) == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_pause_resume_mid_batch_does_not_run_two_loops(datasette):
+    # Pausing and resuming while enrich_batch() is still running used to start a
+    # second loop for the same job: every remaining row got enriched twice
+    datasette._enrich_gate = asyncio.Event()
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/countbatches", cookies=cookies, data={}
+    )
+    assert response.status_code == 302
+    job_id = int(response.headers["location"].split("=")[-1])
+
+    # Sample the registry throughout the run
+    max_live = 0
+
+    async def sample():
+        nonlocal max_live
+        while True:
+            max_live = max(max_live, len(_live_job_tasks(datasette)))
+            await asyncio.sleep(0.01)
+
+    sampler = asyncio.create_task(sample())
+    try:
+        # The first batch is blocked on the gate, so pause + resume both land
+        # while it is in flight
+        await wait_until(
+            lambda: _first_batch_in_flight(datasette, job_id), "first batch to start"
+        )
+        pause = await datasette.client.post(
+            f"/-/enrich/data/-/jobs/{job_id}/pause", cookies=cookies, data={}
+        )
+        assert pause.status_code == 302
+        resume = await datasette.client.post(
+            f"/-/enrich/data/-/jobs/{job_id}/resume", cookies=cookies, data={}
+        )
+        assert resume.status_code == 302
+        assert datasette._enrich_counts.get(11) is None, "first batch finished early"
+        datasette._enrich_gate.set()
+        await wait_for_job(datasette, job_id, "data", timeout=5)
+    finally:
+        sampler.cancel()
+        await asyncio.gather(sampler, return_exceptions=True)
+
+    assert get_status(datasette, job_id) == "finished"
+    # Every row enriched exactly once, by one loop at a time
+    assert datasette._enrich_counts == {i: 1 for i in range(1, 51)}
+    assert datasette._enrich_max_in_flight == 1
+    assert max_live <= 1
+
+
+@pytest.mark.asyncio
+async def test_stopping_loop_restarts_itself_if_resumed(datasette, monkeypatch):
+    # The window the loop's re-read closes: the loop has read 'paused' and is
+    # exiting, but is still registered, so a Resume landing now does not start
+    # a new loop. The exiting loop must notice and restart the job itself.
+    import datasette_enrichments
+
+    real_forget = datasette_enrichments._forget_job_task
+    resumed = []
+
+    def forget_after_resume(registry, key, task):
+        if not resumed:
+            # First call is the stopping loop deregistering itself
+            assert registry.get(key) is task and not task.done()
+            # A Resume here would see this live task and do nothing more
+            # than write the status
+            with datasette._test_db:
+                datasette._test_db.execute(
+                    "update _enrichment_jobs set status = 'running'"
+                )
+            resumed.append(task)
+        return real_forget(registry, key, task)
+
+    monkeypatch.setattr(datasette_enrichments, "_forget_job_task", forget_after_resume)
+    datasette._enrich_gate = asyncio.Event()
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/countbatches", cookies=cookies, data={}
+    )
+    job_id = int(response.headers["location"].split("=")[-1])
+    await wait_until(
+        lambda: _first_batch_in_flight(datasette, job_id), "first batch to start"
+    )
+    pause = await datasette.client.post(
+        f"/-/enrich/data/-/jobs/{job_id}/pause", cookies=cookies, data={}
+    )
+    assert pause.status_code == 302
+    # Let the batch finish: the loop then sees 'paused' and exits
+    datasette._enrich_gate.set()
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+
+    assert resumed, "loop never deregistered itself"
+    assert get_status(datasette, job_id) == "finished"
+    assert datasette._enrich_counts == {i: 1 for i in range(1, 51)}
+    assert datasette._enrich_max_in_flight == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("finished", "cancelled", "paused", "error"))
+async def test_start_ignores_jobs_that_are_not_pending_or_running(datasette, status):
+    # e.g. the restart task acting on a stale snapshot of 'running' jobs
+    job_id = await _insert_job(datasette, status)
+    await _start_job(datasette, job_id)
+    assert _live_job_tasks(datasette) == []
+    assert get_status(datasette, job_id) == status
+    assert not hasattr(datasette, "_enrich_counts")
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_loop_starts_wins(datasette):
+    job_id = await _insert_job(datasette, "pending")
+    await _start_job(datasette, job_id)
+    tasks = _live_job_tasks(datasette)
+    assert len(tasks) == 1
+    # The task is created but has not run yet: cancel in the gap between the
+    # status check and the loop's first write
+    with datasette._test_db:
+        datasette._test_db.execute(
+            "update _enrichment_jobs set status = 'cancelled' where id = ?", (job_id,)
+        )
+    await asyncio.wait(tasks, timeout=5)
+    assert get_status(datasette, job_id) == "cancelled"
+    assert not hasattr(datasette, "_enrich_counts")
+    # Cancelled is terminal, so waiters are released
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_finalize_exception_is_logged_and_does_not_hang(datasette, caplog):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/t/finalizeraises", cookies=cookies, data={}
+    )
+    assert response.status_code == 302
+    job_id = int(response.headers["location"].split("=")[-1])
+    # finalize() raising used to leave wait_for_job() waiting forever
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+    assert get_status(datasette, job_id) == "error"
+    records = [
+        r
+        for r in caplog.records
+        if r.name == "datasette_enrichments" and r.levelname == "ERROR"
+    ]
+    assert len(records) == 1
+    assert f"Enrichment job {job_id}" in records[0].getMessage()
+    assert isinstance(records[0].exc_info[1], RuntimeError)
+    # A fresh wait (no in-process event) also treats 'error' as terminal
+    datasette._enrichment_completed_jobs.clear()
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_job_task_registry_drains(datasette):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/t/hashrows", cookies=cookies, data={}
+    )
+    job_id = int(response.headers["location"].split("=")[-1])
+    registry = datasette._enrichment_job_tasks
+    tasks = list(registry.values())
+    assert len(tasks) == 1
+    await wait_for_job(datasette, job_id, "data", timeout=5)
+    # wait_for_job() returns just before the task itself finishes
+    await asyncio.wait(tasks, timeout=5)
+    assert registry == {}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_job_tasks(datasette):
+    cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
+    response = await datasette.client.post(
+        "/-/enrich/data/has_50_rows/queue", cookies=cookies, data={}
+    )
+    job_id = int(response.headers["location"].split("=")[-1])
+    # The queue enrichment blocks in enrich_batch() until fed
+    await wait_until(
+        lambda: get_status(datasette, job_id) == "running", "job to start running"
+    )
+    tasks = _live_job_tasks(datasette)
+    assert len(tasks) == 1
+    await datasette.invoke_shutdown()
+    assert tasks[0].cancelled()
+    assert datasette._enrichment_job_tasks == {}
+    # Left as 'running' so the restart task resumes it on the next start
+    assert get_status(datasette, job_id) == "running"
+
+
+@pytest.mark.asyncio
+async def test_no_new_job_tasks_once_shutdown_starts(datasette):
+    # A stopping loop's self-restart, or the restart task, must not start a job
+    # after the shutdown hook has taken its snapshot of tasks to cancel
+    job_id = await _insert_job(datasette, "pending")
+    datasette._enrichment_shutting_down = True
+    await _start_job(datasette, job_id)
+    assert _live_job_tasks(datasette) == []
+    assert get_status(datasette, job_id) == "pending"
