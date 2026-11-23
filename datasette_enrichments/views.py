@@ -2,7 +2,6 @@ from datasette import Response, NotFound, Forbidden
 from datasette.resources import DatabaseResource
 from datasette.utils import (
     async_call_with_supported_arguments,
-    path_with_removed_args,
     MultiParams,
     tilde_decode,
 )
@@ -80,7 +79,7 @@ async def job_view(datasette, request):
                 "custom_element": CUSTOM_ELEMENT_JS,
                 "messages": messages,
             },
-            request,
+            request=request,
         )
     )
 
@@ -110,7 +109,7 @@ async def list_jobs_view(datasette, request):
                 "table": table,
                 "jobs": jobs,
             },
-            request,
+            request=request,
         )
     )
 
@@ -148,7 +147,7 @@ async def enrichment_view(datasette, request):
     query_string = urllib.parse.urlencode(bits)
     filtered_data = (
         await datasette.client.get(
-            datasette.urls.table(database, table, "json") + "?" + query_string,
+            datasette.urls.table(database, table, format="json") + "?" + query_string,
             skip_permission_checks=True,
         )
     ).json()
@@ -182,7 +181,7 @@ async def enrichment_view(datasette, request):
                 "enrichment": enrichment,
                 "enrichment_form": form,
             },
-            request,
+            request=request,
         )
     )
 
@@ -208,7 +207,7 @@ async def enrichment_picker(datasette, request):
     )
     # re-encode
     query_string = urllib.parse.urlencode(bits)
-    url = datasette.urls.table(database, table, "json") + "?" + query_string
+    url = datasette.urls.table(database, table, format="json") + "?" + query_string
     response = await datasette.client.get(url, skip_permission_checks=True)
     if response.status_code != 200:
         return Response.text(
@@ -225,10 +224,14 @@ async def enrichment_picker(datasette, request):
         enrichments_and_paths.append(
             {
                 "enrichment": enrichment,
-                "path": path_with_removed_args(
-                    request=request,
-                    args={"_sort"},
-                    path="{}/{}".format(request.path, enrichment.slug),
+                "path": datasette.urls.modify(
+                    "/-/enrich/{}/{}/{}?{}".format(
+                        request.url_vars["database"],
+                        request.url_vars["table"],
+                        enrichment.slug,
+                        request.query_string,
+                    ),
+                    remove="_sort",
                 ),
             }
         )
@@ -242,7 +245,7 @@ async def enrichment_picker(datasette, request):
                 "filtered_data": filtered_data,
                 "enrichments_and_paths": enrichments_and_paths,
             },
-            request,
+            request=request,
         )
     )
 
@@ -288,7 +291,7 @@ async def enrich_data_post(datasette, request, enrichment, filtered_data):
                     "enrichment": enrichment,
                     "enrichment_form": form,
                 },
-                request,
+                request=request,
             )
         )
 

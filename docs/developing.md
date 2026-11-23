@@ -288,22 +288,14 @@ async def test_enrichment(tmpdir):
         for text in ("example a", "example b", "example c"):
             db.execute("insert into news (body) values (?)", [text])
 
-    # Obtain ds_actor and ds_csrftoken cookies
+    # Sign in as root
     cookies = {"ds_actor": datasette.sign({"a": {"id": "root"}}, "actor")}
-    csrftoken = (
-        await datasette.client.get(
-            "/-/enrich/demo/news/name-of-enrichment",
-            cookies=cookies
-        )
-    ).cookies["ds_csrftoken"]
-    cookies["ds_csrftoken"] = csrftoken
 
     # Execute the enrichment
     response = await datasette.client.post(
         "/-/enrich/demo/news/name-of-enrichment",
         data={
             "source_column": "body",
-            "csrftoken": cookies["ds_csrftoken"],
         },
         cookies=cookies,
     )
