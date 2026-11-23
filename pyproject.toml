@@ -1,6 +1,6 @@
 [project]
 name = "datasette-enrichments"
-version = "0.6a0"
+version = "0.6a1"
 description = "Tools for running enrichments against data stored in Datasette"
 readme = "README.md"
 authors = [{name = "Simon Willison"}]
